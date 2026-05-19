@@ -1,0 +1,4 @@
+*.epub
+dist-native/
+node_modules/
+dist/

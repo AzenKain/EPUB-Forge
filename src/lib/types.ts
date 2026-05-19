@@ -1,0 +1,78 @@
+export type EpubFile = {
+  id: string;
+  name: string;
+  size: number;
+};
+
+export type Chapter = {
+  index: number;
+  idref: string;
+  href: string;
+  path: string;
+  title: string;
+  mediaType: string;
+  linear: boolean;
+};
+
+export type DetectedVolume = {
+  label: string;
+  startIndex: number;
+  endIndex: number;
+  confidence: "high" | "medium";
+  reason: string;
+};
+
+export type BookMetadata = {
+  title: string;
+  creator: string;
+  language: string;
+  publisher: string;
+  description: string;
+  subject: string;
+  series?: string;
+  seriesIndex?: string;
+  coverImage?: string;
+};
+
+export type BookAnalysis = {
+  id: string;
+  fileName: string;
+  title: string;
+  creator: string;
+  metadata: BookMetadata;
+  size: number;
+  spine: Chapter[];
+  detectedVolumes: DetectedVolume[];
+  coverPath: string;
+  images: string[];
+};
+
+export type ExportRange = {
+  label: string;
+  startIndex: number;
+  endIndex: number;
+  coverImage?: string;
+};
+
+export type ExportedFile = {
+  name: string;
+  path: string;
+  url: string;
+  size: number;
+};
+
+export type ExportResponse = {
+  files: ExportedFile[];
+};
+
+export const emptyMetadata: BookMetadata = {
+  title: "",
+  creator: "",
+  language: "",
+  publisher: "",
+  description: "",
+  subject: "",
+  series: "",
+  seriesIndex: "",
+  coverImage: ""
+};
