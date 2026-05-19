@@ -116,7 +116,7 @@ function parseChapterHTML(html: string): SplitHTML {
 }
 
 function resolveZipHref(baseDir: string, href: string): string {
-  if (/^(https?:)?\/\
+  if (/^(https?:)?\/\//i.test(href) || href.startsWith("data:") || href.startsWith("#")) {
     return href;
   }
   const parts = baseDir ? baseDir.split('/') : [];

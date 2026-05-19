@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -120,25 +119,25 @@ func CleanHTMLContent(htmlContent string, stripInline bool, removeEmpty bool, no
 	}
 
 	if stripInline {
-		
+
 		body = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style>`).ReplaceAllString(body, "")
-		
+
 		body = regexp.MustCompile(`(?is)\s+style\s*=\s*(?:"[^"]*"|'[^']*')`).ReplaceAllString(body, "")
-		
+
 		body = regexp.MustCompile(`(?is)</?font\b[^>]*>`).ReplaceAllString(body, "")
-		
+
 		body = regexp.MustCompile(`(?is)</?span\b[^>]*>`).ReplaceAllString(body, "")
 	}
 
 	if removeEmpty {
-		
+
 		body = regexp.MustCompile(`(?is)<p\b[^>]*>\s*(?:&nbsp;|\s)*</p>`).ReplaceAllString(body, "")
 	}
 
 	if normalizeParas {
-		
+
 		body = regexp.MustCompile(`(?is)<p\b[^>]*>\s*(?:&nbsp;|\s)+`).ReplaceAllString(body, "<p>")
-		
+
 		body = regexp.MustCompile(`(?is)(?:<br\s*/?>\s*){2,}`).ReplaceAllString(body, "</p><p>")
 	}
 
@@ -147,7 +146,7 @@ func CleanHTMLContent(htmlContent string, stripInline bool, removeEmpty bool, no
 		if filter == "" {
 			continue
 		}
-		
+
 		re, err := regexp.Compile("(?is)" + filter)
 		if err == nil {
 			body = re.ReplaceAllString(body, "")
@@ -246,83 +245,16 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 			navHTML = reorderNavLIsByChapters(navHTML, ctx.Chapters, newChapters, posixDir(navPath))
 			editedFiles[navPath] = []byte(navHTML)
 		}
-		break
-
-		
-		spineMatch := spineRe.FindStringSubmatch(opfXML)
-		if len(spineMatch) < 4 {
-			return "", fmt.Errorf("không tìm thấy thẻ spine trong file opf")
-		}
-		spineHeader := spineMatch[1]
-		spineBody := spineMatch[2]
-		spineFooter := spineMatch[3]
-
-		itemrefs := itemrefRe.FindAllString(spineBody, -1)
-		if len(itemrefs) == 0 {
-			return "", fmt.Errorf("không tìm thấy thẻ itemref nào trong spine")
-		}
-
-		sourceIDRef := ctx.Chapters[index].IDRef
-		targetIDRef := ctx.Chapters[targetIndex].IDRef
-
-		sourceSpineIdx := -1
-		targetSpineIdx := -1
-
-		for idx, rawRef := range itemrefs {
-			attrs := parseAttrs(rawRef)
-			if attrs["idref"] == sourceIDRef {
-				sourceSpineIdx = idx
-			}
-			if attrs["idref"] == targetIDRef {
-				targetSpineIdx = idx
-			}
-		}
-
-		log.Printf("[REORDER OPF LOG] index=%d, targetIndex=%d", index, targetIndex)
-		log.Printf("[REORDER OPF LOG] sourceIDRef=%s, targetIDRef=%s", sourceIDRef, targetIDRef)
-		log.Printf("[REORDER OPF LOG] sourceSpineIdx=%d, targetSpineIdx=%d", sourceSpineIdx, targetSpineIdx)
-
-		if sourceSpineIdx == -1 || targetSpineIdx == -1 {
-			return "", fmt.Errorf("không tìm thấy chương trong spine")
-		}
-
-		refToMove := itemrefs[sourceSpineIdx]
-		log.Printf("[REORDER OPF LOG] refToMove=%s", refToMove)
-		itemrefs = append(itemrefs[:sourceSpineIdx], itemrefs[sourceSpineIdx+1:]...)
-		itemrefs = append(itemrefs[:targetSpineIdx], append([]string{refToMove}, itemrefs[targetSpineIdx:]...)...)
-
-		var newSpineBody strings.Builder
-		newSpineBody.WriteString("\n")
-		for _, ref := range itemrefs {
-			newSpineBody.WriteString("    " + ref + "\n")
-		}
-		newSpineBody.WriteString("  ")
-
-		opfXML = spineRe.ReplaceAllString(opfXML, spineHeader+newSpineBody.String()+spineFooter)
-		editedFiles[ctx.OPFPath] = []byte(opfXML)
-
-		
-		if ncxXML != "" {
-			ncxXML = reorderNCXPoint(ncxXML, ctx.Chapters, index, targetIndex)
-			editedFiles[ncxPath] = []byte(ncxXML)
-		}
-
-		
-		if navPath != "" {
-			navHTML = reorderNavLI(navHTML, ctx.Chapters, index, targetIndex)
-			editedFiles[navPath] = []byte(navHTML)
-		}
-
 	case "add":
-		
+
 		chapterTitle := "Chương mới"
 		if newTitle != "" {
 			chapterTitle = newTitle
 		}
-		
+
 		dir := path.Dir(ctx.Chapters[index].Path)
 		ext := ".html"
-		
+
 		var newRelPath string
 		var newFullPath string
 		var newID string
@@ -331,7 +263,7 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 			newFullPath = path.Join(dir, newFileName)
 			newRelPath = strings.TrimPrefix(newFullPath, ctx.OPFDir)
 			newID = fmt.Sprintf("chapter_new_%d", k)
-			
+
 			exists := false
 			for _, item := range ctx.Manifest {
 				if item.FullPath == newFullPath || item.ID == newID {
@@ -464,9 +396,8 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 		var secondaryIndices []int
 		var mergedTitle string
 
-		
 		if len(mergeIndices) > 1 {
-			
+
 			for _, idx := range mergeIndices {
 				if idx < 0 || idx >= len(ctx.Chapters) {
 					return "", fmt.Errorf("chỉ mục chương %d không hợp lệ", idx)
@@ -476,11 +407,10 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 			chAIdx = mergeIndices[0]
 			secondaryIndices = mergeIndices[1:]
 
-			
 			if newTitle != "" {
 				mergedTitle = newTitle
 			} else {
-				
+
 				titles := []string{}
 				for _, idx := range mergeIndices {
 					titles = append(titles, ctx.Chapters[idx].Title)
@@ -488,7 +418,7 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 				mergedTitle = strings.Join(titles, " & ")
 			}
 		} else {
-			
+
 			chAIdx = index
 			var chBIdx int
 			if targetIndex >= 0 && targetIndex < len(ctx.Chapters) {
@@ -523,7 +453,6 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 
 		chA := ctx.Chapters[chAIdx]
 
-		
 		var currentHTML string
 		if len(mergeIndices) > 1 {
 			var err error
@@ -555,17 +484,15 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 
 		editedFiles[chA.Path] = []byte(currentHTML)
 
-		
 		for _, idx := range secondaryIndices {
 			ch := ctx.Chapters[idx]
 			opfXML = removeSpineItem(opfXML, ch.IDRef)
 		}
 		editedFiles[ctx.OPFPath] = []byte(opfXML)
 
-		
 		deletions := make([]int, len(secondaryIndices))
 		copy(deletions, secondaryIndices)
-		
+
 		for i := 0; i < len(deletions)-1; i++ {
 			for j := i + 1; j < len(deletions); j++ {
 				if deletions[i] < deletions[j] {
@@ -1462,114 +1389,6 @@ func reorderNavLIsByChapters(navHTML string, oldChapters, newChapters []models.C
 		}
 	}
 	return replacePhysicalBlockSlots(navHTML, physicalSlots, desiredBlocks)
-}
-
-func reorderNCXPoint(ncxXML string, chapters []models.Chapter, source, target int) string {
-	chSource := chapters[source]
-	kSource := getSpineOccurrenceCount(chapters, source)
-	contentIdxSource := findKthNCXMatch(ncxXML, chSource.Href, kSource)
-	log.Printf("[REORDER NCX LOG] sourceIndex=%d, chSource.Href=%s, kSource=%d, contentIdxSource=%d", source, chSource.Href, kSource, contentIdxSource)
-	if contentIdxSource == -1 {
-		return ncxXML
-	}
-	navPointStartSource, endIdxSource := findWrappingNavPoint(ncxXML, contentIdxSource)
-	if navPointStartSource == -1 || endIdxSource == -1 {
-		log.Printf("[REORDER NCX LOG] failed to find wrapping <navpoint> for source")
-		return ncxXML
-	}
-
-	sourceBlock := ncxXML[navPointStartSource:endIdxSource]
-
-	chTarget := chapters[target]
-	kTarget := getSpineOccurrenceCount(chapters, target)
-	contentIdxTarget := findKthNCXMatch(ncxXML, chTarget.Href, kTarget)
-	log.Printf("[REORDER NCX LOG] targetIndex=%d, chTarget.Href=%s, kTarget=%d, contentIdxTarget=%d", target, chTarget.Href, kTarget, contentIdxTarget)
-	if contentIdxTarget == -1 {
-		return ncxXML
-	}
-	navPointStartTarget, endIdxTarget := findWrappingNavPoint(ncxXML, contentIdxTarget)
-	if navPointStartTarget == -1 || endIdxTarget == -1 {
-		log.Printf("[REORDER NCX LOG] failed to find wrapping <navpoint> for target")
-		return ncxXML
-	}
-
-	log.Printf("[REORDER NCX LOG] navPointStartSource=%d, endIdxSource=%d, navPointStartTarget=%d, endIdxTarget=%d", navPointStartSource, endIdxSource, navPointStartTarget, endIdxTarget)
-
-	if navPointStartSource < navPointStartTarget {
-		if source < target {
-			
-			log.Printf("[REORDER NCX] Case 1.1: Source physically earlier, logical intent AFTER")
-			return ncxXML[:navPointStartSource] + ncxXML[endIdxSource:endIdxTarget] + "\n" + sourceBlock + ncxXML[endIdxTarget:]
-		} else {
-			
-			log.Printf("[REORDER NCX] Case 1.2: Source physically earlier, logical intent BEFORE")
-			return ncxXML[:navPointStartSource] + ncxXML[endIdxSource:navPointStartTarget] + "\n" + sourceBlock + ncxXML[navPointStartTarget:]
-		}
-	} else {
-		if source > target {
-			
-			log.Printf("[REORDER NCX] Case 2.1: Source physically later, logical intent BEFORE")
-			return ncxXML[:navPointStartTarget] + sourceBlock + "\n" + ncxXML[navPointStartTarget:navPointStartSource] + ncxXML[endIdxSource:]
-		} else {
-			
-			log.Printf("[REORDER NCX] Case 2.2: Source physically later, logical intent AFTER")
-			return ncxXML[:endIdxTarget] + "\n" + sourceBlock + ncxXML[endIdxTarget:navPointStartSource] + ncxXML[endIdxSource:]
-		}
-	}
-}
-
-func reorderNavLI(navHTML string, chapters []models.Chapter, source, target int) string {
-	chSource := chapters[source]
-	kSource := getSpineOccurrenceCount(chapters, source)
-	hrefIdxSource := findKthNavMatch(navHTML, chSource.Href, kSource)
-	log.Printf("[REORDER NAV LOG] sourceIndex=%d, chSource.Href=%s, kSource=%d, hrefIdxSource=%d", source, chSource.Href, kSource, hrefIdxSource)
-	if hrefIdxSource == -1 {
-		return navHTML
-	}
-	liStartSource, endIdxSource := findWrappingLI(navHTML, hrefIdxSource)
-	if liStartSource == -1 || endIdxSource == -1 {
-		log.Printf("[REORDER NAV LOG] failed to find wrapping <li> for source")
-		return navHTML
-	}
-
-	sourceBlock := navHTML[liStartSource:endIdxSource]
-
-	chTarget := chapters[target]
-	kTarget := getSpineOccurrenceCount(chapters, target)
-	hrefIdxTarget := findKthNavMatch(navHTML, chTarget.Href, kTarget)
-	log.Printf("[REORDER NAV LOG] targetIndex=%d, chTarget.Href=%s, kTarget=%d, hrefIdxTarget=%d", target, chTarget.Href, kTarget, hrefIdxTarget)
-	if hrefIdxTarget == -1 {
-		return navHTML
-	}
-	liStartTarget, endIdxTarget := findWrappingLI(navHTML, hrefIdxTarget)
-	if liStartTarget == -1 || endIdxTarget == -1 {
-		log.Printf("[REORDER NAV LOG] failed to find wrapping <li> for target")
-		return navHTML
-	}
-
-	log.Printf("[REORDER NAV LOG] liStartSource=%d, endIdxSource=%d, liStartTarget=%d, endIdxTarget=%d", liStartSource, endIdxSource, liStartTarget, endIdxTarget)
-
-	if liStartSource < liStartTarget {
-		if source < target {
-			
-			log.Printf("[REORDER NAV] Case 1.1: Source physically earlier, logical intent AFTER")
-			return navHTML[:liStartSource] + navHTML[endIdxSource:endIdxTarget] + "\n" + sourceBlock + navHTML[endIdxTarget:]
-		} else {
-			
-			log.Printf("[REORDER NAV] Case 1.2: Source physically earlier, logical intent BEFORE")
-			return navHTML[:liStartSource] + navHTML[endIdxSource:liStartTarget] + "\n" + sourceBlock + navHTML[liStartTarget:]
-		}
-	} else {
-		if source > target {
-			
-			log.Printf("[REORDER NAV] Case 2.1: Source physically later, logical intent BEFORE")
-			return navHTML[:liStartTarget] + sourceBlock + "\n" + navHTML[liStartTarget:liStartSource] + navHTML[endIdxSource:]
-		} else {
-			
-			log.Printf("[REORDER NAV] Case 2.2: Source physically later, logical intent AFTER")
-			return navHTML[:endIdxTarget] + "\n" + sourceBlock + navHTML[endIdxTarget:liStartSource] + navHTML[endIdxSource:]
-		}
-	}
 }
 
 func renumberPlayOrder(ncxXML string) string {

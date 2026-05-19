@@ -262,7 +262,7 @@ function App() {
       }
       return btoa(binary)
         .replace(/\+/g, "-")
-        .replace(/\
+        .replace(/\//g, "_")
         .replace(/=+$/, "");
     };
     setSelectedId(toID(newFileName));
@@ -280,7 +280,7 @@ function App() {
       }
       return btoa(binary)
         .replace(/\+/g, "-")
-        .replace(/\
+        .replace(/\//g, "_")
         .replace(/=+$/, "");
     };
     setSelectedId(toID(newFileName));

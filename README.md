@@ -24,19 +24,19 @@ Built with a high-performance **Go backend** and a modern, high-fidelity **React
 ### 1. Build for Your Target Platform(s)
 To compile the React web UI and bundle it directly into a single self-contained native executable, use the corresponding command:
 
-*   **Windows (AMD64 & ARM64):**
+* **Windows (AMD64 & ARM64):**
     ```bash
     npm run native:build
     ```
-*   **macOS (Intel & Apple Silicon):**
+* **macOS (Intel & Apple Silicon):**
     ```bash
     npm run native:build:mac
     ```
-*   **Linux (AMD64 & ARM64):**
+* **Linux (AMD64 & ARM64):**
     ```bash
     npm run native:build:linux
     ```
-*   **All Platforms:**
+* **All Platforms:**
     ```bash
     npm run native:build:all
     ```
@@ -46,30 +46,30 @@ The output binaries will be placed in the `dist-native/` directory.
 ### 2. Launch the Application
 Run the generated executable for your platform:
 
-*   **Windows (Intel/AMD x64):**
+* **Windows (Intel/AMD x64):**
     ```powershell
     .\dist-native\epubforge-windows-amd64.exe
     ```
-*   **Windows (ARM64):**
+* **Windows (ARM64):**
     ```powershell
     .\dist-native\epubforge-windows-arm64.exe
     ```
-*   **macOS (Intel):**
+* **macOS (Intel):**
     ```bash
     chmod +x ./dist-native/epubforge-darwin-amd64
     ./dist-native/epubforge-darwin-amd64
     ```
-*   **macOS (Apple Silicon / M-Series):**
+* **macOS (Apple Silicon / M-Series):**
     ```bash
     chmod +x ./dist-native/epubforge-darwin-arm64
     ./dist-native/epubforge-darwin-arm64
     ```
-*   **Linux (AMD64):**
+* **Linux (AMD64):**
     ```bash
     chmod +x ./dist-native/epubforge-linux-amd64
     ./dist-native/epubforge-linux-amd64
     ```
-*   **Linux (ARM64):**
+* **Linux (ARM64):**
     ```bash
     chmod +x ./dist-native/epubforge-linux-arm64
     ./dist-native/epubforge-linux-arm64
