@@ -19,13 +19,11 @@ func (s *Service) EmbedFont(id string, fontName string, fontFileName string, fon
 	}
 	defer ctx.Close()
 
-	
 	fontFamily := strings.TrimSpace(fontName)
 	if fontFamily == "" {
 		fontFamily = "CustomFont"
 	}
 
-	
 	fontExt := filepath.Ext(fontFileName)
 	if fontExt == "" {
 		fontExt = ".ttf"
@@ -33,7 +31,6 @@ func (s *Service) EmbedFont(id string, fontName string, fontFileName string, fon
 	fontHref := "Fonts/" + sanitizeFileName(fontFamily) + fontExt
 	fontZipPath := ctx.OPFDir + fontHref
 
-	
 	mediaType := "font/ttf"
 	switch strings.ToLower(fontExt) {
 	case ".otf":
@@ -46,16 +43,13 @@ func (s *Service) EmbedFont(id string, fontName string, fontFileName string, fon
 
 	editedFiles := map[string][]byte{}
 
-	
 	editedFiles[fontZipPath] = fontBytes
 
-	
 	opfXML, err := ctx.readText(ctx.OPFPath)
 	if err != nil {
 		return BookAnalysis{}, err
 	}
 
-	
 	escapedHref := regexp.QuoteMeta(fontHref)
 	hasFontInOPF := regexp.MustCompile(`(?i)href\s*=\s*["']` + escapedHref + `["']`).MatchString(opfXML)
 	if !hasFontInOPF {
@@ -74,7 +68,6 @@ func (s *Service) EmbedFont(id string, fontName string, fontFileName string, fon
 	}
 	editedFiles[ctx.OPFPath] = []byte(opfXML)
 
-	
 	var cssPaths []string
 	for _, item := range ctx.Manifest {
 		if item.MediaType == "text/css" {
@@ -87,7 +80,6 @@ func (s *Service) EmbedFont(id string, fontName string, fontFileName string, fon
 		cssPath := ctx.OPFDir + cssHref
 		cssPaths = append(cssPaths, cssPath)
 
-		
 		manifestMatch := manifestRe.FindStringSubmatch(opfXML)
 		if len(manifestMatch) >= 4 {
 			manifestHeader := manifestMatch[1]
@@ -101,13 +93,12 @@ func (s *Service) EmbedFont(id string, fontName string, fontFileName string, fon
 		}
 	}
 
-	
 	relativeCSSPathToFont := func(cssPath, fontZipPath string) string {
 		dir := path.Dir(cssPath)
 		if dir == "." || dir == "" {
 			return fontZipPath
 		}
-		
+
 		segments := strings.Split(dir, "/")
 		var sb strings.Builder
 		for i := 0; i < len(segments); i++ {
@@ -120,24 +111,21 @@ func (s *Service) EmbedFont(id string, fontName string, fontFileName string, fon
 	reCleanup := regexp.MustCompile(`(?s)\s*/\* Embedded by EPUBForge \*/.*`)
 
 	for _, cssPath := range cssPaths {
-		
+
 		var cssContent string
 		if ctx.Entries[cssPath] != nil {
 			existingCSS, _ := ctx.readText(cssPath)
 			cssContent = existingCSS
 		}
 
-		
 		cssContent = reCleanup.ReplaceAllString(cssContent, "")
 
-		
 		fontRelPath := relativeCSSPathToFont(cssPath, fontZipPath)
 		fontFace := fmt.Sprintf("\n\n/* Embedded by EPUBForge */\n@font-face {\n  font-family: '%s';\n  src: url('%s');\n}\n*, body, p, li, h1, h2, h3, h4, h5, h6, span, div, a {\n  font-family: '%s', sans-serif !important;\n}\n", fontFamily, fontRelPath, fontFamily)
 		cssContent = cssContent + fontFace
 		editedFiles[cssPath] = []byte(cssContent)
 	}
 
-	
 	newFileName, err := ctx.writeEditedEPUB(editedFiles)
 	if err != nil {
 		return BookAnalysis{}, err

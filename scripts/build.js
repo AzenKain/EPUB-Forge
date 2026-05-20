@@ -32,6 +32,18 @@ const targets = {
 
 const argTarget = process.argv[2] || "all";
 
+if (argTarget === "all" || argTarget === "windows") {
+  if (fs.existsSync("logo.ico") && fs.existsSync("app_info.json")) {
+    console.log("Embedding Windows application icon and metadata...");
+    try {
+      const appInfo = JSON.parse(fs.readFileSync("app_info.json", "utf8"));
+      execSync(`go run github.com/tc-hib/go-winres@latest simply --icon logo.ico --manifest gui --product-name "${appInfo.productName}" --product-version "${appInfo.productVersion}" --file-version "${appInfo.fileVersion}" --file-description "${appInfo.fileDescription}" --copyright "${appInfo.copyright}" --out cmd/epubforge/rsrc --arch amd64,386,arm64`, { stdio: "inherit" });
+    } catch (e) {
+      console.warn("Failed to embed Windows resources, skipping:", e.message);
+    }
+  }
+}
+
 function buildBinary(config) {
   const outputPath = path.join(distDir, config.filename);
   console.log(`Building for OS=${config.GOOS} Arch=${config.GOARCH} -> ${outputPath}...`);

@@ -45,11 +45,9 @@ function highlightHTML(code: string): string {
   let match;
   
   while ((match = tokenRegex.exec(code)) !== null) {
-    // Process plain text before the match
     const plainText = code.substring(lastIndex, match.index);
     result += escapeHtml(plainText);
     
-    // Process the matched token
     const comment = match[1];
     const prolog = match[2];
     const tag = match[3];
@@ -59,7 +57,6 @@ function highlightHTML(code: string): string {
     } else if (prolog) {
       result += `<span class="hl-prolog">${escapeHtml(prolog)}</span>`;
     } else if (tag) {
-      // Parse tag name and attributes
       const tagMatch = tag.match(/^(<\/?[a-zA-Z0-9:-]+)(\s[\s\S]*?)?(\/?\s*>)$/);
       if (tagMatch) {
         const start = tagMatch[1];
@@ -67,7 +64,6 @@ function highlightHTML(code: string): string {
         const end = tagMatch[3];
         
         if (attrs) {
-          // Highlight attributes: name="value"
           attrs = attrs.replace(/(\s[a-zA-Z0-9:-]+)(=)(['"].*?['"]|[^>\s]+)/g, (m, aName, aEq, aVal) => {
             return ` <span class="hl-attr-name">${escapeHtml(aName.trim())}</span><span class="hl-punctuation">${aEq}</span><span class="hl-attr-value">${escapeHtml(aVal)}</span>`;
           });
@@ -207,7 +203,6 @@ export function EditChapterModal({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
 
-  // Auto cleaner states
   const [showCleanPanel, setShowCleanPanel] = useState(false);
   const [stripStyles, setStripStyles] = useState(true);
   const [removeEmpty, setRemoveEmpty] = useState(true);
@@ -285,7 +280,6 @@ export function EditChapterModal({
   const preRef = useRef<HTMLPreElement>(null);
   const visualEditorRef = useRef<HTMLDivElement>(null);
 
-  // Sync scroll for the syntax highlighting editor
   const handleScroll = () => {
     if (textareaRef.current && preRef.current) {
       preRef.current.scrollTop = textareaRef.current.scrollTop;
@@ -293,7 +287,6 @@ export function EditChapterModal({
     }
   };
 
-  // Enable literal tab character insert instead of focus skip
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Tab") {
       e.preventDefault();
@@ -312,7 +305,6 @@ export function EditChapterModal({
     }
   };
 
-  // Fetch chapter data
   useEffect(() => {
     if (open && bookId) {
       setActiveTab("visual");
@@ -325,7 +317,6 @@ export function EditChapterModal({
         })
         .then((text) => {
           const parts = parseChapterHTML(text);
-          // Extract style tags from bodyContent to prevent them from leaking into the visual canvas
           const styleRegex = /<style[^>]*>[\s\S]*?<\/style>/gi;
           const matches = parts.bodyContent.match(styleRegex) || [];
           const extractedStyles = matches.join("\n");
@@ -347,22 +338,17 @@ export function EditChapterModal({
     }
   }, [open, bookId, chapterIndex]);
 
-  // Set visual content from parsed body content whenever activeTab becomes visual
   useEffect(() => {
     if (activeTab === "visual" && visualEditorRef.current && parsedParts) {
-      // Rewrite asset paths to API urls for the visual canvas
       const rewrittenContent = rewriteHTMLAssetLinks(parsedParts.bodyContent, bookId, baseDir);
       visualEditorRef.current.innerHTML = rewrittenContent;
     }
   }, [activeTab, parsedParts]);
 
-  // Sync the Visual Editor innerHTML back into the main raw state
   const syncVisualToRaw = () => {
     if (visualEditorRef.current && parsedParts) {
       const newBodyContent = visualEditorRef.current.innerHTML;
-      // Restore asset paths back to relative ones
       const restoredBodyContent = restoreHTMLAssetLinks(newBodyContent, bookId, baseDir);
-      // Prepend style blocks back to maintain exact original EPUB compatibility
       const preservedBodyContent = styleBlocks + restoredBodyContent;
       const newRaw = parsedParts.header + preservedBodyContent + parsedParts.footer;
       setRawContent(newRaw);
@@ -373,7 +359,6 @@ export function EditChapterModal({
     }
   };
 
-  // Tab switching handler with two-way syncing
   const handleTabChange = (tab: "visual" | "raw") => {
     if (tab === activeTab) return;
 
@@ -381,7 +366,6 @@ export function EditChapterModal({
       syncVisualToRaw();
     } else if (activeTab === "raw" && tab === "visual") {
       const parts = parseChapterHTML(rawContent);
-      // Strip style tags during editing but store them
       const styleRegex = /<style[^>]*>[\s\S]*?<\/style>/gi;
       const matches = parts.bodyContent.match(styleRegex) || [];
       const extractedStyles = matches.join("\n");
@@ -396,13 +380,11 @@ export function EditChapterModal({
     setActiveTab(tab);
   };
 
-  // Execute formatting command in visual editor
   const execCmd = (command: string, value: string = "") => {
     document.execCommand(command, false, value);
     visualEditorRef.current?.focus();
   };
 
-  // Handle saving
   const handleSave = async () => {
     try {
       onSetBusy("Đang lưu nội dung chương...");
@@ -411,7 +393,6 @@ export function EditChapterModal({
       let finalContent = rawContent;
       if (activeTab === "visual" && visualEditorRef.current && parsedParts) {
         const newBodyContent = visualEditorRef.current.innerHTML;
-        // Restore asset paths back to relative ones
         const restoredBodyContent = restoreHTMLAssetLinks(newBodyContent, bookId, baseDir);
         const preservedBodyContent = styleBlocks + restoredBodyContent;
         finalContent = parsedParts.header + preservedBodyContent + parsedParts.footer;

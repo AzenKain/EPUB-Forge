@@ -2,3 +2,7 @@
 dist-native/
 node_modules/
 dist/
+output/
+edit/
+*.exe
+*.exe~

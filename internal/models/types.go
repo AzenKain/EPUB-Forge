@@ -101,3 +101,16 @@ type ImportTxtRequest struct {
 	Content      string `json:"content"`
 }
 
+type OptimizeResponse struct {
+	Success      bool     `json:"success"`
+	OriginalSize int64    `json:"originalSize"`
+	NewSize      int64    `json:"newSize"`
+	RemovedFiles []string `json:"removedFiles"`
+}
+
+type OptimizeRequest struct {
+	CleanUnusedImages bool `json:"cleanUnusedImages"`
+	CleanUnusedFonts  bool `json:"cleanUnusedFonts"`
+	CompressImages    bool `json:"compressImages"`
+	ImageQuality      int  `json:"imageQuality"`
+}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Save, X, Upload, Link as LinkIcon, BookOpen, Check, Image as ImageIcon } from "lucide-react";
+import { Save, X, Upload, Link as LinkIcon, BookOpen, Check, Image as ImageIcon, Search, Globe } from "lucide-react";
 import type { BookAnalysis, BookMetadata } from "../lib/types";
 
 type Props = {
@@ -47,6 +47,47 @@ export function MetadataModal({ open, analysis, metadata, dirty, busy, onChange,
 
   const [activeTab, setActiveTab] = useState<"upload" | "link" | "book">("book");
   const [linkUrl, setLinkUrl] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<BookMetadata[]>([]);
+
+  useEffect(() => {
+    if (open) {
+      setSearchQuery(metadata.title || analysis?.title || "");
+      setSearchResults([]);
+    }
+  }, [open, metadata.title, analysis?.title]);
+
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    setSearchResults([]);
+    try {
+      const res = await fetch(`/api/metadata/search?q=${encodeURIComponent(searchQuery.trim())}`);
+      if (!res.ok) {
+        throw new Error("Lỗi khi tìm kiếm trực tuyến");
+      }
+      const data = await res.json();
+      setSearchResults(Array.isArray(data) ? data : []);
+    } catch (err) {
+      alert("Không tìm thấy kết quả hoặc có lỗi kết nối.");
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleSelectBook = (book: BookMetadata) => {
+    onChange({
+      title: book.title || metadata.title,
+      creator: book.creator || metadata.creator,
+      language: book.language || metadata.language,
+      publisher: book.publisher || metadata.publisher,
+      description: book.description || metadata.description,
+      subject: book.subject || metadata.subject,
+      coverImage: book.coverImage || metadata.coverImage
+    });
+    setSearchResults([]);
+  };
 
   const getAssetUrl = (path: string) => {
     if (!path) return "";
@@ -209,8 +250,105 @@ export function MetadataModal({ open, analysis, metadata, dirty, busy, onChange,
             </div>
           </div>
 
-          {}
           <div className="metadataForm" style={{ padding: 0 }}>
+            <div style={{ display: "flex", gap: "8px", alignItems: "flex-end", marginBottom: "16px", background: "#f3eedf", border: "1px solid #e6dfd3", borderRadius: "8px", padding: "10px" }}>
+              <div className="field" style={{ flex: 1, margin: 0 }}>
+                <span style={{ fontSize: "11px", fontWeight: "600", color: "#234e43", display: "flex", alignItems: "center", gap: "4px" }}>
+                  <Globe size={12} />
+                  <span>Tìm kiếm Metadata & Ảnh bìa trực tuyến</span>
+                </span>
+                <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
+                  <input
+                    type="text"
+                    placeholder="Nhập tên sách hoặc tác giả để tìm..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
+                    style={{ height: "32px", fontSize: "12px", border: "1px solid #c9c6bd", borderRadius: "6px", flex: 1, padding: "0 8px", background: "#fff" }}
+                  />
+                  <button
+                    type="button"
+                    className="searchOnlineBtn"
+                    onClick={handleSearch}
+                    disabled={searching || !searchQuery.trim()}
+                  >
+                    <Search size={12} />
+                    <span>{searching ? "Đang tìm..." : "Tìm kiếm"}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {searchResults.length > 0 && (
+              <div
+                style={{
+                  border: "1px solid #e6dfd3",
+                  borderRadius: "8px",
+                  background: "#fff",
+                  padding: "12px",
+                  marginBottom: "16px",
+                  maxHeight: "220px",
+                  overflowY: "auto",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "8px",
+                  boxShadow: "inset 0 2px 4px 0 rgba(0, 0, 0, 0.06)",
+                  flexShrink: 0
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                  <span style={{ fontSize: "11px", fontWeight: "600", color: "#8c8273" }}>Chọn kết quả phù hợp để tự động điền:</span>
+                  <button
+                    type="button"
+                    onClick={() => setSearchResults([])}
+                    style={{ border: "none", background: "none", color: "#c0392b", fontSize: "11px", cursor: "pointer", fontWeight: "500" }}
+                  >
+                    Đóng [X]
+                  </button>
+                </div>
+                {searchResults.map((book, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => handleSelectBook(book)}
+                    style={{
+                      display: "flex",
+                      gap: "10px",
+                      padding: "8px",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      border: "1px solid #f0eae1",
+                      background: "#fbf8f3",
+                      transition: "all 0.2s"
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "#edf7f5";
+                      e.currentTarget.style.borderColor = "#cce8e1";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "#fbf8f3";
+                      e.currentTarget.style.borderColor = "#f0eae1";
+                    }}
+                  >
+                    {book.coverImage ? (
+                      <img
+                        src={book.coverImage}
+                        alt={book.title}
+                        style={{ width: "38px", height: "50px", objectFit: "cover", borderRadius: "4px", border: "1px solid #e6dfd3", background: "#fff" }}
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div style={{ width: "38px", height: "50px", background: "#f0ede4", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "4px", fontSize: "9px", color: "#8c8273", border: "1px solid #e6dfd3" }}>Ảnh bìa</div>
+                    )}
+                    <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: "13px", fontWeight: "600", color: "#1f624d", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={book.title}>{book.title}</span>
+                      <span style={{ fontSize: "11px", color: "#68655c", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{book.creator || "Không rõ tác giả"}</span>
+                      {book.publisher && <span style={{ fontSize: "10px", color: "#8c8273" }}>NXB: {book.publisher}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <TextField label="Title" value={metadata.title} onChange={(title) => onChange({ title })} />
             <TextField label="Author" value={metadata.creator} onChange={(creator) => onChange({ creator })} />
             <div className="formGrid">
@@ -235,7 +373,7 @@ export function MetadataModal({ open, analysis, metadata, dirty, busy, onChange,
           </button>
           <button className="smallButton strong" onClick={onSave} disabled={busy}>
             <Save size={16} />
-            <span>Lưu vào EPUB gốc</span>
+            <span>Lưu thay đổi</span>
           </button>
         </footer>
       </section>

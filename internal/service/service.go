@@ -34,6 +34,7 @@ type ExportRequest = models.ExportRequest
 type ExportedFile = models.ExportedFile
 type ChapterEditRequest = models.ChapterEditRequest
 type ImportTxtRequest = models.ImportTxtRequest
+type OptimizeResponse = models.OptimizeResponse
 
 type volumeStart struct {
 	label      string
@@ -44,6 +45,7 @@ type volumeStart struct {
 
 var (
 	workspace            string
+	editDir              string
 	outputRoot           string
 	itemRe               = regexp.MustCompile(`(?is)<item\b[^>]*/>`)
 	itemrefRe            = regexp.MustCompile(`(?is)<itemref\b[^>]*/?>`)
@@ -77,6 +79,10 @@ type Service struct {
 
 func New(workspaceDir string) (*Service, error) {
 	workspace = workspaceDir
+	editDir = filepath.Join(workspace, "edit")
+	if err := os.MkdirAll(editDir, 0755); err != nil {
+		return nil, err
+	}
 	outputRoot = filepath.Join(workspace, "output")
 	if err := os.MkdirAll(outputRoot, 0755); err != nil {
 		return nil, err
@@ -111,7 +117,6 @@ func (s *Service) OutputFile(relativePath string) (string, string, error) {
 	}
 	return full, filepath.Base(full), nil
 }
-
 
 func cleanText(input string) string {
 	return strings.Join(strings.Fields(html.UnescapeString(input)), " ")
@@ -303,7 +308,7 @@ func findMatchingClosingTag(xmlStr string, startIdx int, openTag, closeTag strin
 
 func (s *Service) ListEpubs() ([]EpubFile, error) {
 	var list []EpubFile
-	entries, err := os.ReadDir(workspace)
+	entries, err := os.ReadDir(editDir)
 	if err != nil {
 		return nil, err
 	}
@@ -320,8 +325,8 @@ func (s *Service) ListEpubs() ([]EpubFile, error) {
 			continue
 		}
 		list = append(list, EpubFile{
-			ID:        toID(name),
-			Name:      name,
+			ID:   toID(name),
+			Name: name,
 			Size: info.Size(),
 		})
 	}
@@ -393,4 +398,40 @@ func (s *Service) SaveMetadata(id string, metadata models.BookMetadata) (models.
 		return models.BookMetadata{}, err
 	}
 	return normalized, nil
+}
+
+func (s *Service) UploadEpub(filename string, data []byte) (string, error) {
+	filename = sanitizeFileName(filename)
+	if !strings.HasSuffix(strings.ToLower(filename), ".epub") {
+		filename += ".epub"
+	}
+	filePath := filepath.Join(editDir, filename)
+	err := os.WriteFile(filePath, data, 0644)
+	if err != nil {
+		return "", err
+	}
+	return filename, nil
+}
+
+func (s *Service) DeleteEpub(id string) error {
+	name, err := fromID(id)
+	if err != nil {
+		return err
+	}
+	filePath := filepath.Join(editDir, name)
+
+	s.bookMu.Lock()
+	if s.locks != nil {
+		delete(s.locks, id)
+	}
+	s.bookMu.Unlock()
+
+	err = os.Remove(filePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	_ = os.Remove(filePath + ".bak")
+	_ = os.Remove(filePath + ".tmp")
+	return nil
 }

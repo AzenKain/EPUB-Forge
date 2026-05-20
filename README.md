@@ -8,9 +8,10 @@ Built with a high-performance **Go backend** and a modern, high-fidelity **React
 
 ## 🌟 Key Features
 
+- **📁 Workspace Management**: Scans and manages EPUB books from the dedicated `edit/` folder. Open/add books from your system and delete them directly from the UI. No longer pollutes your root directory.
 - **⚒️ Advanced Volume Splitter**: Split massive EPUB books into custom volumes. Automatically detects volume boundaries, lets you assign individual covers (uploaded, web URLs, or internal assets), and cleans up unused dependencies so output volumes stay compact.
-- **🔗 Smart EPUB Merger**: Merge multiple EPUB files sequentially with unified metadata and automatic TOC (Table of Contents) combining.
-- **🏷️ Metadata Controller**: Read and write metadata (Title, Author, Publisher, Language, Description, Subjects/Tags) directly to source files or newly generated output EPUBs. Generates `.bak` files alongside modified originals for total safety.
+- **🏷️ Metadata Controller**: Read and write metadata (Title, Author, Publisher, Language, Description, Subjects/Tags) directly to files in the workspace.
+- **🔗 Smart EPUB Merger**: Merge multiple EPUB files sequentially into a single file with unified metadata and combined Table of Contents (TOC).
 - **✍️ Dual-Engine Chapter Editor**:
   - **Visual WYSIWYG Editor**: Write, edit, and style chapters directly with clean typography and layout preservation.
   - **Syntax-Highlighted HTML Code Editor**: Write precise HTML with raw, real-time XML/HTML syntax highlighting, custom indent options, and scroll syncing.

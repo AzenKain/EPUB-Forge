@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Settings, Type } from "lucide-react";
+import { Settings, Type, Sparkles } from "lucide-react";
 import { BookSidebar } from "./components/BookSidebar";
 import { ChaptersPanel } from "./components/ChaptersPanel";
 import { MetadataModal } from "./components/MetadataModal";
@@ -9,6 +9,7 @@ import { VolumesPanel } from "./components/VolumesPanel";
 import { MergeModal } from "./components/MergeModal";
 import { ImportTxtModal } from "./components/ImportTxtModal";
 import { EmbedFontModal } from "./components/EmbedFontModal";
+import { OptimizeModal } from "./components/OptimizeModal";
 import { api, normalizeAnalysis, readError } from "./lib/api";
 import { useAppStore } from "./lib/appStore";
 import { formatBytes } from "./lib/format";
@@ -63,6 +64,8 @@ function App() {
     setExportProgress,
     setPreviewRevision
   } = useAppStore();
+
+  const [optimizeOpen, setOptimizeOpen] = useState(false);
 
   useEffect(() => {
     refreshBooks();
@@ -127,7 +130,7 @@ function App() {
     if (!analysis) {
       return;
     }
-    setBusy("Đang lưu metadata gốc");
+    setBusy("Đang lưu metadata");
     setError("");
     setNotice("");
     try {
@@ -137,7 +140,7 @@ function App() {
         body: JSON.stringify(metadata)
       });
       setMetadataDirty(false);
-      setNotice("Đã lưu metadata vào EPUB gốc. File .bak được tạo cạnh EPUB gốc.");
+      setNotice("Đã lưu metadata vào EPUB thành công.");
       await loadAnalysis(analysis.id);
       setPreviewRevision((prev) => prev + 1);
     } catch (err) {
@@ -253,7 +256,6 @@ function App() {
     setNotice(`Đã gộp thành công các tệp EPUB thành "${newFileName}".`);
     await refreshBooks();
     
-    
     const toID = (name: string) => {
       const utf8Bytes = new TextEncoder().encode(name);
       let binary = "";
@@ -286,6 +288,127 @@ function App() {
     setSelectedId(toID(newFileName));
   }
 
+  async function handleUploadBooks(files: File[]) {
+    setBusy(`Đang tải lên ${files.length} sách...`);
+    setError("");
+    setNotice("");
+    try {
+      const results = await Promise.all(
+        files.map(async (file) => {
+          const formData = new FormData();
+          formData.append("file", file);
+
+          const response = await fetch("/api/epubs/upload", {
+            method: "POST",
+            body: formData
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || response.statusText);
+          }
+
+          const res = await response.json();
+          return res.fileName as string;
+        })
+      );
+
+      setNotice(`Đã thêm thành công ${files.length} sách.`);
+      await refreshBooks();
+
+      const lastUploadedName = results[results.length - 1];
+      if (lastUploadedName) {
+        const toID = (name: string) => {
+          const utf8Bytes = new TextEncoder().encode(name);
+          let binary = "";
+          for (let i = 0; i < utf8Bytes.length; i++) {
+            binary += String.fromCharCode(utf8Bytes[i]);
+          }
+          return btoa(binary)
+            .replace(/\+/g, "-")
+            .replace(/\//g, "_")
+            .replace(/=+$/, "");
+        };
+        setSelectedId(toID(lastUploadedName));
+      }
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleDeleteBook(id: string, name: string) {
+    if (!window.confirm(`Bạn có chắc chắn muốn xoá sách "${name}" không?`)) {
+      return;
+    }
+    setBusy("Đang xoá sách...");
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`/api/epubs/${encodeURIComponent(id)}`, {
+        method: "DELETE"
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || response.statusText);
+      }
+
+      setNotice(`Đã xoá sách "${name}" thành công.`);
+      
+      const remainingBooks = books.filter(b => b.id !== id);
+      if (selectedId === id) {
+        setSelectedId(remainingBooks[0]?.id || "");
+        if (remainingBooks.length === 0) {
+          setAnalysis(null);
+        }
+      }
+      await refreshBooks();
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleDeleteBooks(ids: string[]) {
+    if (!window.confirm(`Bạn có chắc chắn muốn xoá ${ids.length} sách không?`)) {
+      return;
+    }
+    setBusy(`Đang xoá ${ids.length} sách...`);
+    setError("");
+    setNotice("");
+    try {
+      await Promise.all(
+        ids.map(async (id) => {
+          const response = await fetch(`/api/epubs/${encodeURIComponent(id)}`, {
+            method: "DELETE"
+          });
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || response.statusText);
+          }
+        })
+      );
+      setNotice(`Đã xoá ${ids.length} sách thành công.`);
+      
+      const remainingBooks = books.filter(b => !ids.includes(b.id));
+      if (ids.includes(selectedId)) {
+        setSelectedId(remainingBooks[0]?.id || "");
+        if (remainingBooks.length === 0) {
+          setAnalysis(null);
+        }
+      }
+      
+      await refreshBooks();
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
   return (
     <main className={sidebarCollapsed ? "shell sidebarCollapsed" : "shell"}>
       <BookSidebar
@@ -298,6 +421,9 @@ function App() {
         onToggle={() => setSidebarCollapsed((current) => !current)}
         onMergeClick={() => setMergeOpen(true)}
         onImportTxtClick={() => setImportOpen(true)}
+        onUploadBooks={handleUploadBooks}
+        onDeleteBook={handleDeleteBook}
+        onDeleteBooks={handleDeleteBooks}
       />
 
       <section className="workspace">
@@ -318,6 +444,10 @@ function App() {
                 <button className="smallButton metadataButton" onClick={() => setFontOpen(true)}>
                   <Type size={16} />
                   <span>Phông chữ</span>
+                </button>
+                <button className="smallButton metadataButton" onClick={() => setOptimizeOpen(true)}>
+                  <Sparkles size={16} />
+                  <span>Tối ưu</span>
                 </button>
                 <div className="status">{busy || (metadataDirty ? "Metadata chưa lưu" : "Sẵn sàng")}</div>
               </div>
@@ -414,6 +544,20 @@ function App() {
         onSetBusy={setBusy}
         onSetError={setError}
       />
+
+      {analysis && (
+        <OptimizeModal
+          open={optimizeOpen}
+          bookId={analysis.id}
+          bookTitle={metadata.title || analysis.title}
+          onClose={() => setOptimizeOpen(false)}
+          onSuccess={async () => {
+            setOptimizeOpen(false);
+            await loadAnalysis(analysis.id);
+            setPreviewRevision((prev) => prev + 1);
+          }}
+        />
+      )}
 
       {analysis && (
         <EmbedFontModal

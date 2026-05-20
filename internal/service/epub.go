@@ -63,7 +63,7 @@ func loadBook(id string) (*BookContext, error) {
 	if err != nil {
 		return nil, err
 	}
-	filePath := filepath.Join(workspace, name)
+	filePath := filepath.Join(editDir, name)
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return nil, err
@@ -347,12 +347,12 @@ func parseBookMetadata(opf, fileName string) BookMetadata {
 		Subject:     cleanText(stripTags(firstSubmatch(subjectTextRe, opf))),
 	}
 
-	
 	for _, match := range regexp.MustCompile(`(?is)<meta\b[^>]*>`).FindAllString(opf, -1) {
 		attrs := parseAttrs(match)
-		if attrs["name"] == "calibre:series" {
+		switch attrs["name"] {
+		case "calibre:series":
 			metadata.Series = cleanText(attrs["content"])
-		} else if attrs["name"] == "calibre:series_index" {
+		case "calibre:series_index":
 			metadata.SeriesIndex = cleanText(attrs["content"])
 		}
 	}
@@ -535,7 +535,6 @@ func applyCoverImageToOPF(opf string, coverPath string, manifest []ManifestItem)
 func (ctx *BookContext) SaveOriginalMetadata(metadata BookMetadata) error {
 	metadata = normalizeMetadata(metadata, ctx.Metadata)
 	tmp := ctx.FilePath + ".tmp"
-	backup := ctx.FilePath + ".bak"
 	out, err := os.Create(tmp)
 	if err != nil {
 		return err
@@ -580,7 +579,7 @@ func (ctx *BookContext) SaveOriginalMetadata(metadata BookMetadata) error {
 				manifestMatch := manifestRe.FindStringSubmatch(opfContent)
 				if len(manifestMatch) >= 4 {
 					manifestBody := manifestMatch[2]
-					opfContent = replaceXMLBlock(manifestRe, opfContent, manifestBody + "\n" + newItemTag)
+					opfContent = replaceXMLBlock(manifestRe, opfContent, manifestBody+"\n"+newItemTag)
 				}
 			}
 			data = []byte(opfContent)
@@ -632,13 +631,11 @@ func (ctx *BookContext) SaveOriginalMetadata(metadata BookMetadata) error {
 		return err
 	}
 	ctx.Close()
-	_ = os.Remove(backup)
-	if err := os.Rename(ctx.FilePath, backup); err != nil {
+	if err := os.Remove(ctx.FilePath); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, ctx.FilePath); err != nil {
-		_ = os.Rename(backup, ctx.FilePath)
 		_ = os.Remove(tmp)
 		return err
 	}

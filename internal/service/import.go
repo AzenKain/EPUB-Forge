@@ -73,7 +73,6 @@ func (s *Service) ImportText(filename string, fileBytes []byte, customRegex stri
 
 			chapterText := content[start:end]
 
-			
 			firstLineEnd := strings.Index(chapterText, "\n")
 			var chapterTitle string
 			var bodyText string
@@ -96,19 +95,17 @@ func (s *Service) ImportText(filename string, fileBytes []byte, customRegex stri
 		}
 	}
 
-	
 	cleanTitle := sanitizeFileName(title)
 	outputName := cleanTitle + ".epub"
-	outputPath := filepath.Join(workspace, outputName)
+	outputPath := filepath.Join(editDir, outputName)
 
-	
 	counter := 1
 	for {
 		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
 			break
 		}
 		outputName = fmt.Sprintf("%s (%d).epub", cleanTitle, counter)
-		outputPath = filepath.Join(workspace, outputName)
+		outputPath = filepath.Join(editDir, outputName)
 		counter++
 	}
 
@@ -121,7 +118,6 @@ func (s *Service) ImportText(filename string, fileBytes []byte, customRegex stri
 	zw := zip.NewWriter(out)
 	defer zw.Close()
 
-	
 	mimetypeHeader := &zip.FileHeader{
 		Name:   "mimetype",
 		Method: zip.Store,
@@ -135,7 +131,6 @@ func (s *Service) ImportText(filename string, fileBytes []byte, customRegex stri
 		return "", err
 	}
 
-	
 	containerXML := `<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles>
@@ -153,7 +148,6 @@ func (s *Service) ImportText(filename string, fileBytes []byte, customRegex stri
 		return "", err
 	}
 
-	
 	styleCSS := `body {
   font-family: sans-serif;
   margin: 5% 5% 5% 5%;
@@ -180,7 +174,6 @@ p {
 		return "", err
 	}
 
-	
 	type ChapterMeta struct {
 		ID   string
 		Path string
@@ -229,7 +222,6 @@ p {
 		})
 	}
 
-	
 	var manifestItems []string
 	var spineItems []string
 	manifestItems = append(manifestItems, `    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml" />`)
@@ -267,7 +259,6 @@ p {
 		return "", err
 	}
 
-	
 	var ncxPoints []string
 	for idx, chap := range chapters {
 		np := fmt.Sprintf(`    <navPoint id="nav-%d" playOrder="%d">
@@ -302,7 +293,6 @@ p {
 		return "", err
 	}
 
-	
 	if err := zw.Close(); err != nil {
 		return "", fmt.Errorf("lỗi đóng file zip: %w", err)
 	}

@@ -652,13 +652,7 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 }
 
 func (ctx *BookContext) writeEditedEPUB(editedFiles map[string][]byte) (string, error) {
-	var newPath string
-	base := strings.TrimSuffix(ctx.FileName, ".epub")
-	if strings.HasSuffix(base, "_edited") {
-		newPath = ctx.FilePath
-	} else {
-		newPath = filepath.Join(filepath.Dir(ctx.FilePath), base+"_edited.epub")
-	}
+	newPath := ctx.FilePath
 
 	var targetPath string
 	isSame := newPath == ctx.FilePath

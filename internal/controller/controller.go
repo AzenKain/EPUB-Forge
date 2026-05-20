@@ -36,6 +36,14 @@ func (c *Controller) ListEpubs(w http.ResponseWriter, r *http.Request) {
 
 func (c *Controller) Epub(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/epubs/"), "/")
+	if len(parts) == 1 || (len(parts) == 2 && parts[1] == "") {
+		if r.Method == http.MethodDelete {
+			id, _ := url.PathUnescape(parts[0])
+			err := c.service.DeleteEpub(id)
+			utils.WriteJSON(w, map[string]any{"success": true}, err)
+			return
+		}
+	}
 	if len(parts) < 2 {
 		http.NotFound(w, r)
 		return
@@ -163,6 +171,26 @@ func (c *Controller) Epub(w http.ResponseWriter, r *http.Request) {
 		}
 		normalized, err := c.service.SaveMetadata(id, metadata)
 		utils.WriteJSON(w, map[string]any{"metadata": normalized}, err)
+	case len(parts) == 2 && parts[1] == "optimize":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req models.OptimizeRequest
+		if r.ContentLength > 0 {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				utils.WriteError(w, err)
+				return
+			}
+		} else {
+
+			req.CleanUnusedImages = true
+			req.CleanUnusedFonts = true
+			req.CompressImages = true
+			req.ImageQuality = 75
+		}
+		res, err := c.service.Optimize(id, req)
+		utils.WriteJSON(w, res, err)
 	default:
 		http.NotFound(w, r)
 	}
@@ -189,6 +217,11 @@ func (c *Controller) Frontend(w http.ResponseWriter, r *http.Request) {
 	if name == "." || name == "" {
 		name = "index.html"
 	}
+
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
 	if utils.ServeEmbeddedFile(w, r, dist, name) {
 		return
 	}
@@ -257,4 +290,44 @@ func (c *Controller) EmbedFont(id string, w http.ResponseWriter, r *http.Request
 
 	analysis, err := c.service.EmbedFont(id, fontName, header.Filename, buf.Bytes())
 	utils.WriteJSON(w, analysis, err)
+}
+
+func (c *Controller) UploadEpub(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	err := r.ParseMultipartForm(100 << 20)
+	if err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "file is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, file)
+	if err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	fileName, err := c.service.UploadEpub(header.Filename, buf.Bytes())
+	utils.WriteJSON(w, map[string]any{"success": true, "fileName": fileName}, err)
+}
+
+func (c *Controller) SearchMetadata(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	query := r.URL.Query().Get("q")
+	results, err := c.service.SearchMetadataOnline(query)
+	utils.WriteJSON(w, results, err)
 }

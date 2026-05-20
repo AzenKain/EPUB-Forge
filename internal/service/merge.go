@@ -18,12 +18,11 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 		mergedTitle = "Combined Book"
 	}
 
-	
 	var books []*BookContext
 	for _, id := range bookIDs {
 		ctx, err := loadBook(id)
 		if err != nil {
-			
+
 			for _, b := range books {
 				b.Close()
 			}
@@ -37,19 +36,17 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 		}
 	}()
 
-	
 	cleanTitle := sanitizeFileName(mergedTitle)
 	outputName := cleanTitle + ".epub"
-	outputPath := filepath.Join(workspace, outputName)
+	outputPath := filepath.Join(editDir, outputName)
 
-	
 	counter := 1
 	for {
 		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
 			break
 		}
 		outputName = fmt.Sprintf("%s (%d).epub", cleanTitle, counter)
-		outputPath = filepath.Join(workspace, outputName)
+		outputPath = filepath.Join(editDir, outputName)
 		counter++
 	}
 
@@ -62,7 +59,6 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 	zw := zip.NewWriter(out)
 	defer zw.Close()
 
-	
 	mimetypeHeader := &zip.FileHeader{
 		Name:   "mimetype",
 		Method: zip.Store,
@@ -76,10 +72,8 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 		return "", err
 	}
 
-	
 	writtenPaths := map[string]bool{"mimetype": true}
 
-	
 	type ManifestRecord struct {
 		ID        string
 		Href      string
@@ -91,17 +85,15 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 	var masterTOC []TocPoint
 	mergedCoverID := ""
 
-	
 	for bookIdx, book := range books {
 		prefix := fmt.Sprintf("b%d_", bookIdx)
 		folderPrefix := fmt.Sprintf("b%d/", bookIdx)
 
-		
 		for _, f := range book.Reader.File {
 			if f.FileInfo().IsDir() {
 				continue
 			}
-			
+
 			lowerName := strings.ToLower(f.Name)
 			if f.Name == "mimetype" ||
 				strings.HasPrefix(lowerName, "meta-inf/") ||
@@ -110,16 +102,13 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 				continue
 			}
 
-			
 			data, err := readZipFile(f)
 			if err != nil {
 				return "", fmt.Errorf("lỗi đọc file %s trong sách %s: %w", f.Name, book.FileName, err)
 			}
 
-			
 			destPath := folderPrefix + f.Name
 
-			
 			w, err := zw.CreateHeader(&zip.FileHeader{
 				Name:   destPath,
 				Method: zip.Deflate,
@@ -133,9 +122,8 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 			writtenPaths[destPath] = true
 		}
 
-		
 		for _, item := range book.Manifest {
-			
+
 			if book.NCX != nil && item.ID == book.NCX.ID {
 				continue
 			}
@@ -144,7 +132,6 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 			newHref := folderPrefix + item.FullPath
 			coverID := book.coverID()
 
-			
 			newAttrs := make(map[string]string)
 			for k, v := range item.Attrs {
 				newAttrs[k] = v
@@ -168,7 +155,6 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 			})
 		}
 
-		
 		for _, ref := range book.Spine {
 			newIDRef := prefix + ref.IDRef
 			linearAttr := ""
@@ -178,7 +164,6 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 			masterSpine = append(masterSpine, fmt.Sprintf(`    <itemref idref="%s"%s />`, newIDRef, linearAttr))
 		}
 
-		
 		if len(book.TOC) > 0 {
 			for _, pt := range book.TOC {
 				var fragment string
@@ -202,7 +187,6 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 		}
 	}
 
-	
 	containerXML := `<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles>
@@ -220,7 +204,6 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 		return "", err
 	}
 
-	
 	var creatorStr string
 	var langStr string
 	if len(books) > 0 {
@@ -235,7 +218,7 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 	}
 
 	var manifestBuilder strings.Builder
-	
+
 	manifestBuilder.WriteString(`    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml" />` + "\n")
 	for _, rec := range masterManifest {
 		propAttr := ""
@@ -285,7 +268,6 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 		return "", err
 	}
 
-	
 	var ncxBuilder strings.Builder
 	ncxBuilder.WriteString("<?xml version='1.0' encoding='utf-8'?>\n")
 	ncxBuilder.WriteString(`<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">` + "\n")
@@ -318,7 +300,6 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 		return "", err
 	}
 
-	
 	if err := zw.Close(); err != nil {
 		return "", fmt.Errorf("lỗi đóng file zip: %w", err)
 	}
