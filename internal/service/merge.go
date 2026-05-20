@@ -231,7 +231,8 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 
 	var spineBuilder strings.Builder
 	for _, refStr := range masterSpine {
-		spineBuilder.WriteString(refStr + "\n")
+		spineBuilder.WriteString(refStr)
+		spineBuilder.WriteString("\n")
 	}
 
 	opfXML := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
@@ -272,18 +273,28 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 	ncxBuilder.WriteString("<?xml version='1.0' encoding='utf-8'?>\n")
 	ncxBuilder.WriteString(`<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">` + "\n")
 	ncxBuilder.WriteString("  <head>\n")
-	ncxBuilder.WriteString(`    <meta name="dtb:uid" content="` + randomID() + `"/>` + "\n")
+	ncxBuilder.WriteString(`    <meta name="dtb:uid" content="`)
+	ncxBuilder.WriteString(randomID())
+	ncxBuilder.WriteString(`"/>`)
+	ncxBuilder.WriteString("\n")
 	ncxBuilder.WriteString(`    <meta name="dtb:depth" content="1"/>` + "\n")
 	ncxBuilder.WriteString(`    <meta name="dtb:totalPageCount" content="0"/>` + "\n")
 	ncxBuilder.WriteString(`    <meta name="dtb:maxPageNumber" content="0"/>` + "\n")
 	ncxBuilder.WriteString("  </head>\n")
-	ncxBuilder.WriteString("  <docTitle><text>" + escapeXML(mergedTitle) + "</text></docTitle>\n")
+	ncxBuilder.WriteString("  <docTitle><text>")
+	ncxBuilder.WriteString(escapeXML(mergedTitle))
+	ncxBuilder.WriteString("</text></docTitle>\n")
 	ncxBuilder.WriteString("  <navMap>\n")
 
 	for i, pt := range masterTOC {
 		ncxBuilder.WriteString(fmt.Sprintf(`    <navPoint id="nav-%d" playOrder="%d">`+"\n", i+1, i+1))
-		ncxBuilder.WriteString("      <navLabel><text>" + escapeXML(pt.Title) + "</text></navLabel>\n")
-		ncxBuilder.WriteString(`      <content src="` + escapeXML(pt.Src) + `"/>` + "\n")
+		ncxBuilder.WriteString("      <navLabel><text>")
+		ncxBuilder.WriteString(escapeXML(pt.Title))
+		ncxBuilder.WriteString("</text></navLabel>\n")
+		ncxBuilder.WriteString(`      <content src="`)
+		ncxBuilder.WriteString(escapeXML(pt.Src))
+		ncxBuilder.WriteString(`"/>`)
+		ncxBuilder.WriteString("\n")
 		ncxBuilder.WriteString("    </navPoint>\n")
 	}
 

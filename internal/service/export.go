@@ -387,12 +387,17 @@ func (ctx *BookContext) buildNCX(selected []SpineRef, title string) string {
 	b.WriteString("<?xml version='1.0' encoding='utf-8'?>\n")
 	b.WriteString(`<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">` + "\n")
 	b.WriteString("  <head>\n")
-	b.WriteString(`    <meta name="dtb:uid" content="` + randomID() + `"/>` + "\n")
+	b.WriteString(`    <meta name="dtb:uid" content="`)
+	b.WriteString(randomID())
+	b.WriteString(`"/>`)
+	b.WriteString("\n")
 	b.WriteString(`    <meta name="dtb:depth" content="1"/>` + "\n")
 	b.WriteString(`    <meta name="dtb:totalPageCount" content="0"/>` + "\n")
 	b.WriteString(`    <meta name="dtb:maxPageNumber" content="0"/>` + "\n")
 	b.WriteString("  </head>\n")
-	b.WriteString("  <docTitle><text>" + escapeXML(title) + "</text></docTitle>\n")
+	b.WriteString("  <docTitle><text>")
+	b.WriteString(escapeXML(title))
+	b.WriteString("</text></docTitle>\n")
 	b.WriteString("  <navMap>\n")
 	for i, ref := range selected {
 		item, ok := ctx.ManifestByID[ref.IDRef]
@@ -407,8 +412,13 @@ func (ctx *BookContext) buildNCX(selected []SpineRef, title string) string {
 			}
 		}
 		b.WriteString(fmt.Sprintf(`    <navPoint id="nav-%d" playOrder="%d">`+"\n", i+1, i+1))
-		b.WriteString("      <navLabel><text>" + escapeXML(chapterTitle) + "</text></navLabel>\n")
-		b.WriteString(`      <content src="` + escapeXML(item.Href) + `"/>` + "\n")
+		b.WriteString("      <navLabel><text>")
+		b.WriteString(escapeXML(chapterTitle))
+		b.WriteString("</text></navLabel>\n")
+		b.WriteString(`      <content src="`)
+		b.WriteString(escapeXML(item.Href))
+		b.WriteString(`"/>`)
+		b.WriteString("\n")
 		b.WriteString("    </navPoint>\n")
 	}
 	b.WriteString("  </navMap>\n</ncx>")

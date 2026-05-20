@@ -953,7 +953,9 @@ func reorderOPFSpine(opfXML string, oldChapters, newChapters []models.Chapter) (
 	var newSpineBody strings.Builder
 	newSpineBody.WriteString("\n")
 	for _, ref := range itemrefs {
-		newSpineBody.WriteString("    " + ref + "\n")
+		newSpineBody.WriteString("    ")
+		newSpineBody.WriteString(ref)
+		newSpineBody.WriteString("\n")
 	}
 	newSpineBody.WriteString("  ")
 
