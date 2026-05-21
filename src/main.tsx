@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Settings, Type, Sparkles } from "lucide-react";
+import { Settings, Type, Sparkles, Search } from "lucide-react";
 import { BookSidebar } from "./components/BookSidebar";
 import { ChaptersPanel } from "./components/ChaptersPanel";
 import { MetadataModal } from "./components/MetadataModal";
@@ -10,6 +10,7 @@ import { MergeModal } from "./components/MergeModal";
 import { ImportTxtModal } from "./components/ImportTxtModal";
 import { EmbedFontModal } from "./components/EmbedFontModal";
 import { OptimizeModal } from "./components/OptimizeModal";
+import { FindReplaceModal } from "./components/FindReplaceModal";
 import { api, normalizeAnalysis, readError } from "./lib/api";
 import { useAppStore } from "./lib/appStore";
 import { formatBytes } from "./lib/format";
@@ -66,6 +67,7 @@ function App() {
   } = useAppStore();
 
   const [optimizeOpen, setOptimizeOpen] = useState(false);
+  const [findReplaceOpen, setFindReplaceOpen] = useState(false);
 
   useEffect(() => {
     refreshBooks();
@@ -235,7 +237,7 @@ function App() {
               total: data.total,
               label: data.label
             });
-            setBusy(`Đang tách ${data.label} (${data.index + 1}/${data.total})`);
+            setBusy(`Đang tách... ${data.index + 1}/${data.total}`);
           } else if (data.type === "error") {
             throw new Error(data.error || "Lỗi khi xuất EPUB");
           } else if (data.type === "done") {
@@ -449,6 +451,10 @@ function App() {
                   <Sparkles size={16} />
                   <span>Tối ưu</span>
                 </button>
+                <button className="smallButton metadataButton" onClick={() => setFindReplaceOpen(true)}>
+                  <Search size={16} />
+                  <span>Tìm & Thay</span>
+                </button>
                 <div className="status">{busy || (metadataDirty ? "Metadata chưa lưu" : "Sẵn sàng")}</div>
               </div>
             </header>
@@ -564,6 +570,29 @@ function App() {
           open={fontOpen}
           analysis={analysis}
           onClose={() => setFontOpen(false)}
+          onUpdateAnalysis={async (newAnalysis) => {
+            if (newAnalysis.id !== selectedId) {
+              setSelectedId(newAnalysis.id);
+            } else {
+              setAnalysis(newAnalysis);
+              setMetadata(newAnalysis.metadata || {});
+              setMetadataDirty(false);
+            }
+            await refreshBooks();
+            setPreviewRevision((prev) => prev + 1);
+          }}
+          onSetBusy={setBusy}
+          onSetError={setError}
+        />
+      )}
+
+      {analysis && (
+        <FindReplaceModal
+          open={findReplaceOpen}
+          bookId={analysis.id}
+          currentChapterIndex={previewIndex}
+          chapters={analysis.spine}
+          onClose={() => setFindReplaceOpen(false)}
           onUpdateAnalysis={async (newAnalysis) => {
             if (newAnalysis.id !== selectedId) {
               setSelectedId(newAnalysis.id);

@@ -102,15 +102,65 @@ type ImportTxtRequest struct {
 }
 
 type OptimizeResponse struct {
-	Success      bool     `json:"success"`
-	OriginalSize int64    `json:"originalSize"`
-	NewSize      int64    `json:"newSize"`
-	RemovedFiles []string `json:"removedFiles"`
+	Success         bool     `json:"success"`
+	OriginalSize    int64    `json:"originalSize"`
+	NewSize         int64    `json:"newSize"`
+	RemovedFiles    []string `json:"removedFiles"`
+	ConvertedImages []string `json:"convertedImages,omitempty"`
 }
 
 type OptimizeRequest struct {
-	CleanUnusedImages bool `json:"cleanUnusedImages"`
-	CleanUnusedFonts  bool `json:"cleanUnusedFonts"`
-	CompressImages    bool `json:"compressImages"`
-	ImageQuality      int  `json:"imageQuality"`
+	CleanUnusedImages   bool     `json:"cleanUnusedImages"`
+	CleanUnusedFonts    bool     `json:"cleanUnusedFonts"`
+	CompressImages      bool     `json:"compressImages"`
+	ConvertToWebp       bool     `json:"convertToWebp"`
+	ImageQuality        int      `json:"imageQuality"`
+	CleanHTML           bool     `json:"cleanHTML"`
+	StripInlineStyles   bool     `json:"stripInlineStyles"`
+	RemoveEmptyLines    bool     `json:"removeEmptyLines"`
+	NormalizeParagraphs bool     `json:"normalizeParagraphs"`
+	RegexFilters        []string `json:"regexFilters"`
+}
+
+type FindRequest struct {
+	Query         string `json:"query"`
+	Mode          string `json:"mode"`         
+	Scope         string `json:"scope"`       
+	ChapterIndex  int    `json:"chapterIndex"`  
+	CaseSensitive bool   `json:"caseSensitive"`
+	DotAll        bool   `json:"dotAll"`
+}
+
+type FindMatch struct {
+	ChapterIndex int    `json:"chapterIndex"`
+	ChapterTitle string `json:"chapterTitle"`
+	ChapterPath  string `json:"chapterPath"`
+	LineNumber   int    `json:"lineNumber"`
+	LineContent  string `json:"lineContent"`
+	StartCol     int    `json:"startCol"`
+	EndCol       int    `json:"endCol"`
+	StartOffset  int    `json:"startOffset"`
+	EndOffset    int    `json:"endOffset"`
+}
+
+type FindResponse struct {
+	Matches []FindMatch `json:"matches"`
+}
+
+type ReplaceRequest struct {
+	Query         string `json:"query"`
+	Replacement   string `json:"replacement"`
+	Mode          string `json:"mode"`
+	Scope         string `json:"scope"`
+	ChapterIndex  int    `json:"chapterIndex"`
+	CaseSensitive bool   `json:"caseSensitive"`
+	DotAll        bool   `json:"dotAll"`
+	ReplaceAll    bool   `json:"replaceAll"`
+	MatchIndex    int    `json:"matchIndex"`
+}
+
+type ReplaceResponse struct {
+	Success       bool         `json:"success"`
+	ReplacedCount int          `json:"replacedCount"`
+	Analysis      BookAnalysis `json:"analysis"`
 }

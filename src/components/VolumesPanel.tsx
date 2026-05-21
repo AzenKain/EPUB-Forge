@@ -147,7 +147,9 @@ export function VolumesPanel({
       {exportProgress && (
         <div className="progressWrapper">
           <div className="progressText">
-            <span>Đang xuất: {exportProgress.label}</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, marginRight: "8px" }} title={`Đang xuất: ${exportProgress.label}`}>
+              Đang xuất: {exportProgress.label}
+            </span>
             <span>{Math.round((exportProgress.index / exportProgress.total) * 100)}%</span>
           </div>
           <div className="progressBarContainer">

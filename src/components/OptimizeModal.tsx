@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, Sparkles, AlertTriangle, CheckCircle, Trash2, ArrowDown } from "lucide-react";
+import { X, Sparkles, AlertTriangle, CheckCircle, Trash2, ArrowDown, Image, Type, Zap, FileText } from "lucide-react";
 
 type Props = {
   open: boolean;
@@ -14,18 +14,77 @@ type OptimizeResult = {
   originalSize: number;
   newSize: number;
   removedFiles: string[];
+  convertedImages?: string[];
 };
+
+type OptionCardProps = {
+  checked: boolean;
+  onChange: () => void;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  title: string;
+  description: string;
+};
+
+function OptionCard({ checked, onChange, icon: Icon, title, description }: OptionCardProps) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div
+      onClick={onChange}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: "12px",
+        padding: "14px",
+        borderRadius: "10px",
+        border: `1px solid ${checked ? "#2f7d69" : hovered ? "#c9c6bd" : "#e6dfd3"}`,
+        background: checked ? "#f4faf7" : "#fff",
+        boxShadow: checked ? "0 2px 8px rgba(47, 125, 105, 0.05)" : hovered ? "0 2px 6px rgba(0,0,0,0.02)" : "none",
+        cursor: "pointer",
+        transition: "all 0.2s ease-in-out",
+      }}
+    >
+      <div style={{ marginTop: "2px" }}>
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => {
+            e.stopPropagation();
+            onChange();
+          }}
+          style={{ width: "16px", height: "16px", accentColor: "#2f7d69", cursor: "pointer" }}
+        />
+      </div>
+      <div style={{ display: "flex", gap: "10px", flex: 1 }}>
+        <div style={{ color: checked ? "#2f7d69" : "#8c8273", marginTop: "1px" }}>
+          <Icon size={18} />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+          <strong style={{ fontSize: "13px", color: checked ? "#1f624d" : "#17201c" }}>{title}</strong>
+          <span style={{ color: "#687168", fontSize: "11px", lineHeight: "1.4" }}>{description}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<OptimizeResult | null>(null);
 
-  
   const [cleanUnusedImages, setCleanUnusedImages] = useState(true);
   const [cleanUnusedFonts, setCleanUnusedFonts] = useState(true);
   const [compressImages, setCompressImages] = useState(true);
-  const [imageQuality, setImageQuality] = useState(75);
+  const [convertToWebp, setConvertToWebp] = useState(true);
+  const [imageQuality, setImageQuality] = useState(100);
+
+  const [cleanHTML, setCleanHTML] = useState(false);
+  const [stripInlineStyles, setStripInlineStyles] = useState(true);
+  const [removeEmptyLines, setRemoveEmptyLines] = useState(true);
+  const [normalizeParagraphs, setNormalizeParagraphs] = useState(true);
+  const [regexFilters, setRegexFilters] = useState("");
 
   if (!open) return null;
 
@@ -52,7 +111,13 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
           cleanUnusedImages,
           cleanUnusedFonts,
           compressImages,
+          convertToWebp,
           imageQuality,
+          cleanHTML,
+          stripInlineStyles,
+          removeEmptyLines,
+          normalizeParagraphs,
+          regexFilters: regexFilters.split("\n").map(f => f.trim()).filter(Boolean),
         }),
       });
       if (!res.ok) {
@@ -139,88 +204,163 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
               >
                 <strong>Bộ tối ưu hóa giúp giảm thiểu dung lượng file sách:</strong>
                 <ul style={{ margin: "8px 0 0 16px", padding: 0, display: "flex", flexDirection: "column", gap: "4px" }}>
-                  <li>Phân tích và phát hiện toàn bộ tài nguyên thừa không sử dụng trong sách.</li>
+                  <li>Phân tích và loại bỏ các tài nguyên rác hoặc không sử dụng.</li>
+                  <li>Tự động chuyển đổi định dạng và nén hình ảnh với thuật toán tối ưu.</li>
                   <li>Cập nhật file OPF Manifest đảm bảo tệp tin sạch sẽ, chuẩn cấu trúc EPUB.</li>
                 </ul>
               </div>
 
-              
               <div
                 style={{
-                  border: "1px solid #e6dfd3",
-                  borderRadius: "8px",
-                  background: "#fff",
-                  padding: "16px",
                   display: "flex",
                   flexDirection: "column",
-                  gap: "14px"
+                  gap: "12px"
                 }}
               >
                 <span style={{ fontSize: "11px", fontWeight: "700", color: "#8c8273", textTransform: "uppercase", letterSpacing: "0.5px" }}>
                   Tùy chỉnh tối ưu hóa
                 </span>
 
-                <label style={{ display: "flex", alignItems: "flex-start", gap: "10px", cursor: "pointer", fontSize: "13px", color: "#17201c" }}>
-                  <input
-                    type="checkbox"
-                    checked={cleanUnusedImages}
-                    onChange={(e) => setCleanUnusedImages(e.target.checked)}
-                    style={{ width: "16px", height: "16px", accentColor: "#2f7d69", marginTop: "2px" }}
-                  />
-                  <div>
-                    <strong style={{ display: "block" }}>Dọn dẹp ảnh thừa không dùng</strong>
-                    <span style={{ color: "#687168", fontSize: "11px" }}>Tự động xóa các file ảnh rác không được liên kết trong bất kỳ chương nào.</span>
-                  </div>
-                </label>
+                <OptionCard
+                  checked={cleanUnusedImages}
+                  onChange={() => setCleanUnusedImages(!cleanUnusedImages)}
+                  icon={Trash2}
+                  title="Dọn dẹp ảnh thừa không dùng"
+                  description="Tự động xóa các file ảnh rác không được liên kết trong bất kỳ chương nào."
+                />
 
-                <label style={{ display: "flex", alignItems: "flex-start", gap: "10px", cursor: "pointer", fontSize: "13px", color: "#17201c" }}>
-                  <input
-                    type="checkbox"
-                    checked={cleanUnusedFonts}
-                    onChange={(e) => setCleanUnusedFonts(e.target.checked)}
-                    style={{ width: "16px", height: "16px", accentColor: "#2f7d69", marginTop: "2px" }}
-                  />
-                  <div>
-                    <strong style={{ display: "block" }}>Dọn dẹp font chữ thừa</strong>
-                    <span style={{ color: "#687168", fontSize: "11px" }}>Tự động xóa các tệp font (.ttf, .otf, .woff) không được khai báo sử dụng.</span>
-                  </div>
-                </label>
+                <OptionCard
+                  checked={cleanUnusedFonts}
+                  onChange={() => setCleanUnusedFonts(!cleanUnusedFonts)}
+                  icon={Type}
+                  title="Dọn dẹp font chữ thừa"
+                  description="Tự động xóa các tệp font (.ttf, .otf, .woff) không được khai báo sử dụng."
+                />
 
-                <div style={{ borderTop: "1px solid #f0eae1", paddingTop: "12px", display: "flex", flexDirection: "column", gap: "12px" }}>
-                  <label style={{ display: "flex", alignItems: "flex-start", gap: "10px", cursor: "pointer", fontSize: "13px", color: "#17201c" }}>
-                    <input
-                      type="checkbox"
-                      checked={compressImages}
-                      onChange={(e) => setCompressImages(e.target.checked)}
-                      style={{ width: "16px", height: "16px", accentColor: "#2f7d69", marginTop: "2px" }}
-                    />
-                    <div>
-                      <strong style={{ display: "block" }}>Nén giảm dung lượng ảnh</strong>
-                      <span style={{ color: "#687168", fontSize: "11px" }}>Thực hiện nén lại toàn bộ hình ảnh JPEG và PNG trong sách để tiết kiệm bộ nhớ.</span>
-                    </div>
-                  </label>
+                <OptionCard
+                  checked={compressImages}
+                  onChange={() => setCompressImages(!compressImages)}
+                  icon={Image}
+                  title="Nén giảm dung lượng ảnh JPEG/PNG"
+                  description="Thực hiện nén lại toàn bộ hình ảnh JPEG và PNG trong sách để tiết kiệm bộ nhớ."
+                />
 
-                  {compressImages && (
-                    <div style={{ paddingLeft: "26px", display: "flex", flexDirection: "column", gap: "6px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px" }}>
-                        <span style={{ color: "#687168" }}>Chất lượng ảnh JPEG sau nén:</span>
-                        <strong style={{ color: "#2f7d69", fontSize: "13px" }}>{imageQuality}%</strong>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                        <span style={{ fontSize: "11px", color: "#8a928a" }}>Dung lượng nhỏ</span>
+                <OptionCard
+                  checked={convertToWebp}
+                  onChange={() => setConvertToWebp(!convertToWebp)}
+                  icon={Zap}
+                  title="Chuyển đổi hình ảnh sang WebP"
+                  description="Tự động chuyển đổi các định dạng JPEG/PNG sang WebP hiện đại và siêu nhẹ."
+                />
+
+                <OptionCard
+                  checked={cleanHTML}
+                  onChange={() => setCleanHTML(!cleanHTML)}
+                  icon={FileText}
+                  title="Dọn dẹp & Chuẩn hóa HTML (Toàn bộ sách)"
+                  description="Xóa style CSS rác, thẻ trống, dòng trống thừa và chuẩn hóa thụt lề cho toàn cuốn sách."
+                />
+
+                {cleanHTML && (
+                  <div
+                    style={{
+                      padding: "16px",
+                      background: "#fff",
+                      border: "1px solid #e6dfd3",
+                      borderRadius: "10px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "12px"
+                    }}
+                  >
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "24px", marginBottom: "4px" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", fontWeight: "500", cursor: "pointer", color: "#17201c" }}>
                         <input
-                          type="range"
-                          min="10"
-                          max="100"
-                          value={imageQuality}
-                          onChange={(e) => setImageQuality(parseInt(e.target.value))}
-                          style={{ flex: 1, accentColor: "#2f7d69", height: "6px", borderRadius: "3px", cursor: "pointer" }}
+                          type="checkbox"
+                          checked={stripInlineStyles}
+                          onChange={() => setStripInlineStyles(!stripInlineStyles)}
+                          style={{ width: "16px", height: "16px", accentColor: "#2f7d69", cursor: "pointer" }}
                         />
-                        <span style={{ fontSize: "11px", color: "#8a928a" }}>Chất lượng cao</span>
-                      </div>
+                        <span>Style CSS rác</span>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", fontWeight: "500", cursor: "pointer", color: "#17201c" }}>
+                        <input
+                          type="checkbox"
+                          checked={removeEmptyLines}
+                          onChange={() => setRemoveEmptyLines(!removeEmptyLines)}
+                          style={{ width: "16px", height: "16px", accentColor: "#2f7d69", cursor: "pointer" }}
+                        />
+                        <span>Dòng trống thừa</span>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", fontWeight: "500", cursor: "pointer", color: "#17201c" }}>
+                        <input
+                          type="checkbox"
+                          checked={normalizeParagraphs}
+                          onChange={() => setNormalizeParagraphs(!normalizeParagraphs)}
+                          style={{ width: "16px", height: "16px", accentColor: "#2f7d69", cursor: "pointer" }}
+                        />
+                        <span>Chuẩn hóa thụt lề</span>
+                      </label>
                     </div>
-                  )}
-                </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <span style={{ fontSize: "13px", fontWeight: "600", color: "#544f45" }}>
+                        Bộ lọc Regex tùy chỉnh (Mỗi dòng một regex - sẽ xóa khớp trùng):
+                      </span>
+                      <textarea
+                        rows={3}
+                        value={regexFilters}
+                        onChange={(e) => setRegexFilters(e.target.value)}
+                        placeholder="Ví dụ: <div class='ads'>.*?</div>"
+                        style={{
+                          width: "100%",
+                          padding: "10px 12px",
+                          fontSize: "12px",
+                          fontFamily: "monospace",
+                          border: "1px solid #c9c6bd",
+                          borderRadius: "8px",
+                          resize: "vertical",
+                          background: "#fff",
+                          color: "#17201c",
+                          outline: "none",
+                          boxSizing: "border-box"
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {compressImages && (
+                  <div
+                    style={{
+                      marginTop: "4px",
+                      padding: "14px",
+                      background: "#fff",
+                      border: "1px solid #e6dfd3",
+                      borderRadius: "10px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "8px"
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px" }}>
+                      <span style={{ color: "#687168", fontWeight: "600" }}>Chất lượng hình ảnh sau tối ưu:</span>
+                      <strong style={{ color: "#2f7d69", fontSize: "13px" }}>{imageQuality}%</strong>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <span style={{ fontSize: "11px", color: "#8a928a" }}>Dung lượng nhỏ</span>
+                      <input
+                        type="range"
+                        min="10"
+                        max="100"
+                        value={imageQuality}
+                        onChange={(e) => setImageQuality(parseInt(e.target.value))}
+                        style={{ flex: 1, accentColor: "#2f7d69", height: "6px", borderRadius: "3px", cursor: "pointer" }}
+                      />
+                      <span style={{ fontSize: "11px", color: "#8a928a" }}>Chất lượng cao</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <p style={{ fontSize: "12px", color: "#8c8273", lineHeight: "1.5", margin: 0, fontStyle: "italic" }}>
@@ -231,7 +371,7 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
                 type="button"
                 className="smallButton strong"
                 onClick={handleOptimize}
-                disabled={!cleanUnusedImages && !cleanUnusedFonts && !compressImages}
+                disabled={!cleanUnusedImages && !cleanUnusedFonts && !compressImages && !convertToWebp && !cleanHTML}
                 style={{
                   width: "100%",
                   height: "42px",
@@ -317,7 +457,7 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
                 ) : (
                   <div
                     style={{
-                      maxHeight: "150px",
+                      maxHeight: "100px",
                       overflowY: "auto",
                       border: "1px solid #e6dfd3",
                       borderRadius: "6px",
@@ -338,6 +478,36 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
                   </div>
                 )}
               </div>
+
+              {result.convertedImages && result.convertedImages.length > 0 && (
+                <div>
+                  <span style={{ fontSize: "12px", fontWeight: "600", color: "#2f7d69", display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                    <Zap size={12} />
+                    <span>Đã chuyển đổi {result.convertedImages.length} hình ảnh sang WebP:</span>
+                  </span>
+                  <div
+                    style={{
+                      maxHeight: "100px",
+                      overflowY: "auto",
+                      border: "1px solid #e6dfd3",
+                      borderRadius: "6px",
+                      background: "#fff",
+                      padding: "8px 12px",
+                      fontSize: "12px",
+                      fontFamily: "monospace",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "4px"
+                    }}
+                  >
+                    {result.convertedImages.map((file) => (
+                      <div key={file} style={{ color: "#2f7d69", wordBreak: "break-all" }}>
+                        ✓ {file}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

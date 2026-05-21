@@ -183,13 +183,41 @@ func (c *Controller) Epub(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-
 			req.CleanUnusedImages = true
 			req.CleanUnusedFonts = true
 			req.CompressImages = true
-			req.ImageQuality = 75
+			req.ConvertToWebp = true
+			req.ImageQuality = 100
+			req.CleanHTML = false
+			req.StripInlineStyles = true
+			req.RemoveEmptyLines = true
+			req.NormalizeParagraphs = true
 		}
 		res, err := c.service.Optimize(id, req)
+		utils.WriteJSON(w, res, err)
+	case len(parts) == 2 && parts[1] == "find":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req models.FindRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			utils.WriteError(w, err)
+			return
+		}
+		res, err := c.service.Find(id, req)
+		utils.WriteJSON(w, res, err)
+	case len(parts) == 2 && parts[1] == "replace":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req models.ReplaceRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			utils.WriteError(w, err)
+			return
+		}
+		res, err := c.service.Replace(id, req)
 		utils.WriteJSON(w, res, err)
 	default:
 		http.NotFound(w, r)
@@ -328,6 +356,7 @@ func (c *Controller) SearchMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query().Get("q")
-	results, err := c.service.SearchMetadataOnline(query)
+	source := r.URL.Query().Get("source")
+	results, err := c.service.SearchMetadataOnline(query, source)
 	utils.WriteJSON(w, results, err)
 }

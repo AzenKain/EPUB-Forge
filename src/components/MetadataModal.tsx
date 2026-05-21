@@ -48,6 +48,7 @@ export function MetadataModal({ open, analysis, metadata, dirty, busy, onChange,
   const [activeTab, setActiveTab] = useState<"upload" | "link" | "book">("book");
   const [linkUrl, setLinkUrl] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchSource, setSearchSource] = useState("auto");
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<BookMetadata[]>([]);
 
@@ -63,14 +64,15 @@ export function MetadataModal({ open, analysis, metadata, dirty, busy, onChange,
     setSearching(true);
     setSearchResults([]);
     try {
-      const res = await fetch(`/api/metadata/search?q=${encodeURIComponent(searchQuery.trim())}`);
+      const res = await fetch(`/api/metadata/search?q=${encodeURIComponent(searchQuery.trim())}&source=${searchSource}`);
       if (!res.ok) {
-        throw new Error("Lỗi khi tìm kiếm trực tuyến");
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Lỗi khi tìm kiếm trực tuyến");
       }
       const data = await res.json();
       setSearchResults(Array.isArray(data) ? data : []);
-    } catch (err) {
-      alert("Không tìm thấy kết quả hoặc có lỗi kết nối.");
+    } catch (err: any) {
+      alert(err.message || "Không tìm thấy kết quả hoặc có lỗi kết nối.");
     } finally {
       setSearching(false);
     }
@@ -258,6 +260,26 @@ export function MetadataModal({ open, analysis, metadata, dirty, busy, onChange,
                   <span>Tìm kiếm Metadata & Ảnh bìa trực tuyến</span>
                 </span>
                 <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
+                  <select
+                    value={searchSource}
+                    onChange={(e) => setSearchSource(e.target.value)}
+                    style={{
+                      height: "32px",
+                      padding: "0 8px",
+                      fontSize: "12px",
+                      border: "1px solid #c9c6bd",
+                      borderRadius: "6px",
+                      background: "#fff",
+                      color: "#17201c",
+                      outline: "none",
+                      cursor: "pointer"
+                    }}
+                  >
+                    <option value="auto">Môi trường: Tự động</option>
+                    <option value="anilist">AniList (Light Novel Hàn/Nhật)</option>
+                    <option value="google">Google Books (Tổng hợp)</option>
+                    <option value="openlibrary">Open Library (Sách tiếng Anh)</option>
+                  </select>
                   <input
                     type="text"
                     placeholder="Nhập tên sách hoặc tác giả để tìm..."

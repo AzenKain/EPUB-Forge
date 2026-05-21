@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,61 +40,291 @@ type openLibraryResponse struct {
 	} `json:"docs"`
 }
 
-func cleanQueryForFallback(query string) string {
-	if idx := strings.Index(query, "-"); idx != -1 {
-		part := strings.TrimSpace(query[:idx])
-		if part != "" {
-			query = part
-		}
+func doGetRequest(apiURL string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, err
 	}
-	re := regexp.MustCompile(`(?i)\s*(?:tập|vol(?:ume)?|quyển|chương|chuong)\b.*`)
-	query = re.ReplaceAllString(query, "")
-	return strings.TrimSpace(query)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "application/json")
+	
+	client := &http.Client{}
+	return client.Do(req)
 }
 
-func (s *Service) SearchMetadataOnline(query string) ([]BookMetadata, error) {
+func cleanQueryForFallback(query string) string {
+	reParens := regexp.MustCompile(`\s*[\(\[\{].*?[\)\]\}]`)
+	cleaned := reParens.ReplaceAllString(query, "")
+
+	if idx := strings.Index(cleaned, "-"); idx != -1 {
+		part := strings.TrimSpace(cleaned[:idx])
+		if part != "" {
+			cleaned = part
+		}
+	}
+
+	reVolume := regexp.MustCompile(`(?i)\s*(?:tập|vol(?:ume)?|quyển|chương|chuong)\b.*`)
+	cleaned = reVolume.ReplaceAllString(cleaned, "")
+	rePunct := regexp.MustCompile(`[^\p{L}\p{N}\s]`)
+	cleaned = rePunct.ReplaceAllString(cleaned, "")
+	words := strings.Fields(cleaned)
+	cleaned = strings.Join(words, " ")
+
+	return strings.TrimSpace(cleaned)
+}
+
+func cleanQueryForAniList(query string) string {
+	// Remove parenthetical notes/subtitles, e.g. "(Iya, Shinai!!)" or "[LN]"
+	reParens := regexp.MustCompile(`\s*[\(\[\{].*?[\)\]\}]`)
+	cleaned := reParens.ReplaceAllString(query, "")
+
+	reVolume := regexp.MustCompile(`(?i)\s*(?:tập|vol(?:ume)?|quyển|chương|chuong)\b.*`)
+	cleaned = reVolume.ReplaceAllString(cleaned, "")
+
+	cleaned = strings.TrimRight(cleaned, " -:")
+
+	// Normalize spaces
+	words := strings.Fields(cleaned)
+	cleaned = strings.Join(words, " ")
+
+	return strings.TrimSpace(cleaned)
+}
+
+func (s *Service) SearchMetadataOnline(query string, source string) ([]BookMetadata, error) {
 	if query == "" {
 		return nil, errors.New("truy vấn tìm kiếm rỗng")
 	}
 
-	results, err := s.searchGoogleBooks(query)
-	if err == nil && len(results) > 0 {
-		return results, nil
-	}
-
-	cleanQuery := cleanQueryForFallback(query)
-	var olResults []BookMetadata
-	var olErr error
-	if cleanQuery != "" {
-		olResults, olErr = s.searchOpenLibrary(cleanQuery)
-	}
-
-	if (olErr != nil || len(olResults) == 0) && cleanQuery != query {
-		var olErr2 error
-		olResults, olErr2 = s.searchOpenLibrary(query)
-		if olErr2 != nil {
-			olErr = olErr2
+	switch source {
+	case "google":
+		return s.searchGoogleBooks(query)
+	case "anilist":
+		return s.searchAniList(query)
+	case "openlibrary":
+		return s.searchOpenLibrary(query)
+	default:
+		results, err := s.searchAniList(query)
+		if err == nil && len(results) > 0 {
+			return results, nil
 		}
+
+		// Try Google Books second
+		var gbErr error
+		results, gbErr = s.searchGoogleBooks(query)
+		if gbErr == nil && len(results) > 0 {
+			return results, nil
+		}
+
+		// Try Open Library as fallback
+		cleanQuery := cleanQueryForFallback(query)
+		var olResults []BookMetadata
+		var olErr error
+		if cleanQuery != "" {
+			olResults, olErr = s.searchOpenLibrary(cleanQuery)
+		}
+
+		if (olErr != nil || len(olResults) == 0) && cleanQuery != query {
+			var olErr2 error
+			olResults, olErr2 = s.searchOpenLibrary(query)
+			if olErr2 == nil && len(olResults) > 0 {
+				olErr = nil
+			} else if olErr2 != nil {
+				olErr = olErr2
+			}
+		}
+
+		if olErr == nil && len(olResults) > 0 {
+			return olResults, nil
+		}
+
+		// Collect errors to report if none of them found anything
+		if err != nil {
+			return nil, fmt.Errorf("lỗi AniList: %v", err)
+		}
+		if gbErr != nil {
+			return nil, fmt.Errorf("lỗi Google Books: %v", gbErr)
+		}
+		if olErr != nil {
+			return nil, fmt.Errorf("lỗi Open Library: %v", olErr)
+		}
+
+		return nil, nil
+	}
+}
+
+type aniListResponse struct {
+	Data struct {
+		Page struct {
+			Media []struct {
+				Title struct {
+					Romaji  string `json:"romaji"`
+					English string `json:"english"`
+					Native  string `json:"native"`
+				} `json:"title"`
+				Description string `json:"description"`
+				Format      string `json:"format"`
+				CountryOfOrigin string `json:"countryOfOrigin"`
+				CoverImage  struct {
+					Large string `json:"large"`
+				} `json:"coverImage"`
+				Staff struct {
+					Edges []struct {
+						Role string `json:"role"`
+						Node struct {
+							Name struct {
+								Full string `json:"full"`
+							} `json:"name"`
+						} `json:"node"`
+					} `json:"edges"`
+				} `json:"staff"`
+				Genres []string `json:"genres"`
+			} `json:"media"`
+		} `json:"page"`
+	} `json:"data"`
+}
+
+func (s *Service) searchAniList(query string) ([]BookMetadata, error) {
+	cleanQuery := cleanQueryForAniList(query)
+	if cleanQuery == "" {
+		cleanQuery = query
 	}
 
-	if olErr == nil && len(olResults) > 0 {
-		return olResults, nil
-	}
+	graphqlQuery := `
+query ($search: String) {
+  Page(page: 1, perPage: 10) {
+    media(search: $search, type: MANGA) {
+      title {
+        romaji
+        english
+        native
+      }
+      format
+      countryOfOrigin
+      description
+      coverImage {
+        large
+      }
+      staff {
+        edges {
+          role
+          node {
+            name {
+              full
+            }
+          }
+        }
+      }
+      genres
+    }
+  }
+}`
 
+	requestBody, err := json.Marshal(map[string]any{
+		"query": graphqlQuery,
+		"variables": map[string]any{
+			"search": cleanQuery,
+		},
+	})
 	if err != nil {
-		return nil, fmt.Errorf("%w (Open Library fallback error: %v)", err, olErr)
+		return nil, err
 	}
 
-	if olErr != nil {
-		return nil, olErr
+	req, err := http.NewRequest("POST", "https://graphql.anilist.co", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("anilist API returned status: %d", resp.StatusCode)
 	}
 
-	return nil, nil
+	var data aniListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	var results []BookMetadata
+	for _, media := range data.Data.Page.Media {
+		// Prefer English title, then Romaji, then Native
+		title := media.Title.English
+		if title == "" {
+			title = media.Title.Romaji
+		}
+		if title == "" {
+			title = media.Title.Native
+		}
+
+		// Collect authors
+		var creators []string
+		for _, edge := range media.Staff.Edges {
+			roleLower := strings.ToLower(edge.Role)
+			if strings.Contains(roleLower, "story") || strings.Contains(roleLower, "author") || strings.Contains(roleLower, "creator") || strings.Contains(roleLower, "writer") {
+				creators = append(creators, edge.Node.Name.Full)
+			}
+		}
+		if len(creators) == 0 && len(media.Staff.Edges) > 0 {
+			creators = append(creators, media.Staff.Edges[0].Node.Name.Full)
+		}
+		creatorStr := strings.Join(creators, ", ")
+
+		subjectStr := strings.Join(media.Genres, ", ")
+
+		// Clean HTML tags from description
+		desc := media.Description
+		desc = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(desc, "")
+
+		// Determine language from country of origin
+		lang := "ja"
+		switch media.CountryOfOrigin {
+		case "KR":
+			lang = "ko"
+		case "CN", "TW":
+			lang = "zh"
+		case "JP":
+			lang = "ja"
+		}
+
+		// Determine publisher labels based on format and country
+		pub := "AniList Database"
+		switch media.Format {
+		case "NOVEL":
+			pub = "AniList Novel Database"
+		case "MANGA":
+			if media.CountryOfOrigin == "KR" {
+				pub = "AniList Manhwa Database"
+			} else if media.CountryOfOrigin == "CN" || media.CountryOfOrigin == "TW" {
+				pub = "AniList Manhua Database"
+			} else {
+				pub = "AniList Manga Database"
+			}
+		}
+
+		results = append(results, BookMetadata{
+			Title:       title,
+			Creator:     creatorStr,
+			Language:    lang,
+			Publisher:   pub,
+			Description: desc,
+			Subject:     subjectStr,
+			CoverImage:  media.CoverImage.Large,
+		})
+	}
+
+	return results, nil
 }
 
 func (s *Service) searchGoogleBooks(query string) ([]BookMetadata, error) {
 	apiURL := "https://www.googleapis.com/books/v1/volumes?q=" + url.QueryEscape(query)
-	resp, err := http.Get(apiURL)
+	resp, err := doGetRequest(apiURL)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +371,7 @@ func (s *Service) searchGoogleBooks(query string) ([]BookMetadata, error) {
 
 func (s *Service) searchOpenLibrary(query string) ([]BookMetadata, error) {
 	apiURL := "https://openlibrary.org/search.json?q=" + url.QueryEscape(query) + "&limit=10"
-	resp, err := http.Get(apiURL)
+	resp, err := doGetRequest(apiURL)
 	if err != nil {
 		return nil, err
 	}

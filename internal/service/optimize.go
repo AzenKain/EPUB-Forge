@@ -3,15 +3,19 @@ package service
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"epubforge/internal/models"
+
+	"github.com/deepteams/webp"
 )
 
 func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.OptimizeResponse, error) {
@@ -92,6 +96,54 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 		}
 	}
 
+	renameMap := make(map[string]string)
+	type BasenameReplacement struct {
+		Old string
+		New string
+	}
+	var basenameReplacements []BasenameReplacement
+	convertedBytes := make(map[string][]byte)
+
+	if req.ConvertToWebp {
+		for name, f := range ctx.Entries {
+			if f.FileInfo().IsDir() {
+				continue
+			}
+			if removedPaths[name] {
+				continue
+			}
+			ext := strings.ToLower(filepath.Ext(name))
+			if ext == ".jpg" || ext == ".jpeg" || ext == ".png" {
+				rc, err := f.Open()
+				if err != nil {
+					continue
+				}
+				originalData, err := io.ReadAll(rc)
+				_ = rc.Close()
+				if err != nil {
+					continue
+				}
+				webpData, err := convertToWebp(originalData, req.ImageQuality)
+				if err == nil {
+					newExt := ".webp"
+					newName := name[:len(name)-len(ext)] + newExt
+					renameMap[name] = newName
+					convertedBytes[name] = webpData
+
+					oldBase := filepath.Base(name)
+					newBase := filepath.Base(newName)
+					basenameReplacements = append(basenameReplacements, BasenameReplacement{
+						Old: oldBase,
+						New: newBase,
+					})
+				}
+			}
+		}
+		sort.Slice(basenameReplacements, func(i, j int) bool {
+			return len(basenameReplacements[i].Old) > len(basenameReplacements[j].Old)
+		})
+	}
+
 	tmpPath := ctx.FilePath + ".tmp"
 	out, err := os.Create(tmpPath)
 	if err != nil {
@@ -108,31 +160,58 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 			continue
 		}
 
-		rc, err := f.Open()
-		if err != nil {
-			_ = zw.Close()
-			_ = out.Close()
-			_ = os.Remove(tmpPath)
-			return models.OptimizeResponse{}, err
-		}
-		data, err := io.ReadAll(rc)
-		_ = rc.Close()
-		if err != nil {
-			_ = zw.Close()
-			_ = out.Close()
-			_ = os.Remove(tmpPath)
-			return models.OptimizeResponse{}, err
+		var data []byte
+		var readErr error
+		targetName := name
+
+		if webpData, ok := convertedBytes[name]; ok {
+			data = webpData
+			if newPath, ok := renameMap[name]; ok {
+				targetName = newPath
+			}
+		} else {
+			rc, err := f.Open()
+			if err != nil {
+				_ = zw.Close()
+				_ = out.Close()
+				_ = os.Remove(tmpPath)
+				return models.OptimizeResponse{}, err
+			}
+			data, readErr = io.ReadAll(rc)
+			_ = rc.Close()
+			if readErr != nil {
+				_ = zw.Close()
+				_ = out.Close()
+				_ = os.Remove(tmpPath)
+				return models.OptimizeResponse{}, readErr
+			}
+
+			if req.CompressImages {
+				data = compressImage(name, data, req.ImageQuality)
+			}
 		}
 
 		if name == ctx.OPFPath {
-			opfStr := cleanOPFManifest(string(data), removedPaths, ctx.OPFDir)
+			opfStr := cleanAndRenameOPFManifest(string(data), removedPaths, renameMap, ctx.OPFDir)
+			for _, repl := range basenameReplacements {
+				opfStr = strings.ReplaceAll(opfStr, repl.Old, repl.New)
+			}
 			data = []byte(opfStr)
-		} else if req.CompressImages {
-
-			data = compressImage(name, data, req.ImageQuality)
+		} else {
+			ext := strings.ToLower(filepath.Ext(name))
+			if ext == ".xhtml" || ext == ".html" || ext == ".htm" || ext == ".css" || ext == ".ncx" {
+				txt := string(data)
+				if req.CleanHTML && (ext == ".xhtml" || ext == ".html" || ext == ".htm") {
+					txt = CleanHTMLContent(txt, req.StripInlineStyles, req.RemoveEmptyLines, req.NormalizeParagraphs, req.RegexFilters)
+				}
+				for _, repl := range basenameReplacements {
+					txt = strings.ReplaceAll(txt, repl.Old, repl.New)
+				}
+				data = []byte(txt)
+			}
 		}
 
-		w, err := zw.Create(name)
+		w, err := zw.Create(targetName)
 		if err != nil {
 			_ = zw.Close()
 			_ = out.Close()
@@ -168,15 +247,22 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 		newSize = newInfo.Size()
 	}
 
+	var convertedList []string
+	for oldPath := range renameMap {
+		convertedList = append(convertedList, oldPath)
+	}
+	sort.Strings(convertedList)
+
 	return models.OptimizeResponse{
-		Success:      true,
-		OriginalSize: ctx.Size,
-		NewSize:      newSize,
-		RemovedFiles: removedList,
+		Success:         true,
+		OriginalSize:    ctx.Size,
+		NewSize:         newSize,
+		RemovedFiles:    removedList,
+		ConvertedImages: convertedList,
 	}, nil
 }
 
-func cleanOPFManifest(opfContent string, removedPaths map[string]bool, opfDir string) string {
+func cleanAndRenameOPFManifest(opfContent string, removedPaths map[string]bool, renameMap map[string]string, opfDir string) string {
 	manifestMatch := manifestRe.FindStringSubmatch(opfContent)
 	if len(manifestMatch) < 4 {
 		return opfContent
@@ -199,7 +285,31 @@ func cleanOPFManifest(opfContent string, removedPaths map[string]bool, opfDir st
 		if removedPaths[fullPath] {
 			continue
 		}
-		newItems = append(newItems, raw)
+
+		if newFullPath, ok := renameMap[fullPath]; ok {
+			newHref := newFullPath
+			if opfDir != "" && strings.HasPrefix(newFullPath, opfDir) {
+				newHref = strings.Replace(newFullPath, opfDir, "", 1)
+			}
+
+			id := attrs["id"]
+			properties := attrs["properties"]
+
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf(`<item id="%s" href="%s" media-type="image/webp"`, escapeXML(id), escapeXML(newHref)))
+			if properties != "" {
+				sb.WriteString(fmt.Sprintf(` properties="%s"`, escapeXML(properties)))
+			}
+			for k, v := range attrs {
+				if k != "id" && k != "href" && k != "media-type" && k != "properties" {
+					sb.WriteString(fmt.Sprintf(` %s="%s"`, k, escapeXML(v)))
+				}
+			}
+			sb.WriteString("/>")
+			newItems = append(newItems, "    "+sb.String())
+		} else {
+			newItems = append(newItems, raw)
+		}
 	}
 
 	newManifestBody := strings.Join(newItems, "\n")
@@ -233,4 +343,24 @@ func compressImage(name string, originalData []byte, quality int) []byte {
 		return buf.Bytes()
 	}
 	return originalData
+}
+
+func convertToWebp(originalData []byte, quality int) ([]byte, error) {
+	img, _, err := image.Decode(bytes.NewReader(originalData))
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	if quality <= 0 || quality > 100 {
+		quality = 75
+	}
+	err = webp.Encode(&buf, img, &webp.EncoderOptions{
+		Quality: float32(quality),
+		Method:  4,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

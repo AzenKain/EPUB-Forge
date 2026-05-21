@@ -249,6 +249,11 @@ func (ctx *BookContext) writeSplit(outputPath, label string, selected []SpineRef
 		}
 	}
 
+	ncxPath := resolveZipHref(ctx.OPFDir, "toc.ncx")
+	if ctx.NCX != nil {
+		ncxPath = ctx.NCX.FullPath
+	}
+
 	navPath := ""
 	for _, item := range ctx.Manifest {
 		if strings.Contains(strings.ToLower(item.Attrs["properties"]), "nav") {
@@ -259,7 +264,13 @@ func (ctx *BookContext) writeSplit(outputPath, label string, selected []SpineRef
 	if navPath == "" {
 		for _, item := range ctx.Manifest {
 			lower := strings.ToLower(item.FullPath)
-			if strings.HasSuffix(lower, "nav.xhtml") || strings.HasSuffix(lower, "toc.html") || strings.HasSuffix(lower, "nav.html") || strings.HasSuffix(lower, "index.html") {
+			if strings.HasSuffix(lower, "nav.xhtml") ||
+				strings.HasSuffix(lower, "toc.xhtml") ||
+				strings.HasSuffix(lower, "toc.html") ||
+				strings.HasSuffix(lower, "nav.html") ||
+				strings.HasSuffix(lower, "index.html") ||
+				strings.Contains(lower, "/nav.") ||
+				strings.Contains(lower, "/toc.") {
 				navPath = item.FullPath
 				break
 			}
@@ -267,7 +278,7 @@ func (ctx *BookContext) writeSplit(outputPath, label string, selected []SpineRef
 	}
 
 	for p := range selectedPaths {
-		if p == "mimetype" || p == ctx.OPFPath || (ctx.NCX != nil && p == ctx.NCX.FullPath) {
+		if p == "mimetype" || p == ctx.OPFPath || p == ncxPath {
 			continue
 		}
 		var data []byte
@@ -286,7 +297,9 @@ func (ctx *BookContext) writeSplit(outputPath, label string, selected []SpineRef
 			lowerP := strings.ToLower(p)
 			if strings.HasSuffix(lowerP, ".html") || strings.HasSuffix(lowerP, ".xhtml") {
 				if p == navPath {
-					cleanedHTML := ctx.cleanNavHTML(string(data), selected)
+					cleanedHTML := ctx.cleanNavHTML(string(data), navPath, selected)
+					cleanedHTML = cleanDeadVolumeContainers(cleanedHTML, p, selectedPaths)
+					cleanedHTML = cleanHTMLLinks(cleanedHTML, p, selectedPaths)
 					data = []byte(cleanedHTML)
 				} else {
 					cleanedHTML := cleanDeadVolumeContainers(string(data), p, selectedPaths)
@@ -304,11 +317,7 @@ func (ctx *BookContext) writeSplit(outputPath, label string, selected []SpineRef
 	if err := writeEntry(ctx.OPFPath, []byte(ctx.buildOPF(selectedIDs, selected, volumeMetadata)), zip.Deflate); err != nil {
 		return closeZipErr(zw, out, tmp, err)
 	}
-	ncxPath := resolveZipHref(ctx.OPFDir, "toc.ncx")
-	if ctx.NCX != nil {
-		ncxPath = ctx.NCX.FullPath
-	}
-	if err := writeEntry(ncxPath, []byte(ctx.buildNCX(selected, volumeMetadata.Title)), zip.Deflate); err != nil {
+	if err := writeEntry(ncxPath, []byte(ctx.buildNCX(ncxPath, selected, volumeMetadata.Title)), zip.Deflate); err != nil {
 		return closeZipErr(zw, out, tmp, err)
 	}
 	if err := zw.Close(); err != nil {
@@ -382,7 +391,7 @@ func (ctx *BookContext) buildOPF(selectedIDs map[string]bool, selected []SpineRe
 	return opf
 }
 
-func (ctx *BookContext) buildNCX(selected []SpineRef, title string) string {
+func (ctx *BookContext) buildNCX(ncxPath string, selected []SpineRef, title string) string {
 	var b strings.Builder
 	b.WriteString("<?xml version='1.0' encoding='utf-8'?>\n")
 	b.WriteString(`<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">` + "\n")
@@ -416,7 +425,7 @@ func (ctx *BookContext) buildNCX(selected []SpineRef, title string) string {
 		b.WriteString(escapeXML(chapterTitle))
 		b.WriteString("</text></navLabel>\n")
 		b.WriteString(`      <content src="`)
-		b.WriteString(escapeXML(item.Href))
+		b.WriteString(escapeXML(relativeZipPath(ncxPath, item.FullPath)))
 		b.WriteString(`"/>`)
 		b.WriteString("\n")
 		b.WriteString("    </navPoint>\n")
@@ -425,7 +434,7 @@ func (ctx *BookContext) buildNCX(selected []SpineRef, title string) string {
 	return b.String()
 }
 
-func (ctx *BookContext) cleanNavHTML(navHTML string, selected []SpineRef) string {
+func (ctx *BookContext) cleanNavHTML(navHTML string, navPath string, selected []SpineRef) string {
 	var lis []string
 	for _, ref := range selected {
 		item, ok := ctx.ManifestByID[ref.IDRef]
@@ -439,9 +448,9 @@ func (ctx *BookContext) cleanNavHTML(navHTML string, selected []SpineRef) string
 				break
 			}
 		}
-		lis = append(lis, fmt.Sprintf(`      <li><a href="%s">%s</a></li>`, escapeXML(item.Href), escapeXML(chapterTitle)))
+		relHref := relativeZipPath(navPath, item.FullPath)
+		lis = append(lis, fmt.Sprintf(`      <li><a href="%s">%s</a></li>`, escapeXML(relHref), escapeXML(chapterTitle)))
 	}
-	newOL := "<ol>\n" + strings.Join(lis, "\n") + "\n    </ol>"
 
 	reNav := regexp.MustCompile(`(?is)<nav\b[^>]*>.*?</nav>`)
 	navMatches := reNav.FindAllStringIndex(navHTML, -1)
@@ -459,25 +468,66 @@ func (ctx *BookContext) cleanNavHTML(navHTML string, selected []SpineRef) string
 		targetNavIdx = navMatches[0][0]
 	}
 
+	reOL := regexp.MustCompile(`(?is)<ol\b[^>]*>.*?</ol>`)
+	reUL := regexp.MustCompile(`(?is)<ul\b[^>]*>.*?</ul>`)
+
 	if targetNavIdx != -1 {
 		navBlockClose := findMatchingClosingTag(navHTML, targetNavIdx, "<nav", "</nav>")
 		if navBlockClose != -1 {
 			navBlock := navHTML[targetNavIdx:navBlockClose]
 
-			reOL := regexp.MustCompile(`(?is)<ol\b[^>]*>.*?</ol>`)
 			olMatch := reOL.FindStringIndex(navBlock)
-			if olMatch != nil {
-				startOL := targetNavIdx + olMatch[0]
-				endOL := targetNavIdx + olMatch[1]
-				return navHTML[:startOL] + newOL + navHTML[endOL:]
+			ulMatch := reUL.FindStringIndex(navBlock)
+			var listMatch []int
+			tagType := "ol"
+			if olMatch != nil && ulMatch != nil {
+				if olMatch[0] < ulMatch[0] {
+					listMatch = olMatch
+					tagType = "ol"
+				} else {
+					listMatch = ulMatch
+					tagType = "ul"
+				}
+			} else if olMatch != nil {
+				listMatch = olMatch
+				tagType = "ol"
+			} else if ulMatch != nil {
+				listMatch = ulMatch
+				tagType = "ul"
+			}
+
+			if listMatch != nil {
+				newList := "<" + tagType + ">\n" + strings.Join(lis, "\n") + "\n    </" + tagType + ">"
+				startList := targetNavIdx + listMatch[0]
+				endList := targetNavIdx + listMatch[1]
+				return navHTML[:startList] + newList + navHTML[endList:]
 			}
 		}
 	}
 
-	reOL := regexp.MustCompile(`(?is)<ol\b[^>]*>.*?</ol>`)
 	olMatch := reOL.FindStringIndex(navHTML)
-	if olMatch != nil {
-		return navHTML[:olMatch[0]] + newOL + navHTML[olMatch[1]:]
+	ulMatch := reUL.FindStringIndex(navHTML)
+	var listMatch []int
+	tagType := "ol"
+	if olMatch != nil && ulMatch != nil {
+		if olMatch[0] < ulMatch[0] {
+			listMatch = olMatch
+			tagType = "ol"
+		} else {
+			listMatch = ulMatch
+			tagType = "ul"
+		}
+	} else if olMatch != nil {
+		listMatch = olMatch
+		tagType = "ol"
+	} else if ulMatch != nil {
+		listMatch = ulMatch
+		tagType = "ul"
+	}
+
+	if listMatch != nil {
+		newList := "<" + tagType + ">\n" + strings.Join(lis, "\n") + "\n    </" + tagType + ">"
+		return navHTML[:listMatch[0]] + newList + navHTML[listMatch[1]:]
 	}
 
 	return navHTML
@@ -1294,7 +1344,14 @@ func (ctx *BookContext) resolveCoverBytes(coverImageStr string) ([]byte, error) 
 			return nil, fmt.Errorf("lỗi đọc ảnh đại diện base64: %w", err)
 		}
 	} else if strings.HasPrefix(coverImageStr, "http://") || strings.HasPrefix(coverImageStr, "https://") {
-		resp, err := http.Get(coverImageStr)
+		req, err := http.NewRequest("GET", coverImageStr, nil)
+		if err != nil {
+			return nil, fmt.Errorf("lỗi tạo request tải ảnh: %w", err)
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		
+		client := &http.Client{}
+		resp, err := client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("lỗi tải ảnh từ link: %w", err)
 		}
@@ -1326,4 +1383,21 @@ func (ctx *BookContext) resolveCoverBytes(coverImageStr string) ([]byte, error) 
 	}
 
 	return converted, nil
+}
+
+func relativeZipPath(fromPath, toPath string) string {
+	fromDir := posixDir(fromPath)
+	if fromDir == "" {
+		return toPath
+	}
+	if strings.HasPrefix(toPath, fromDir) {
+		return toPath[len(fromDir):]
+	}
+	fromOS := filepath.FromSlash(fromDir)
+	toOS := filepath.FromSlash(toPath)
+	rel, err := filepath.Rel(fromOS, toOS)
+	if err != nil {
+		return toPath
+	}
+	return filepath.ToSlash(rel)
 }
