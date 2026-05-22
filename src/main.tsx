@@ -7,13 +7,12 @@ import { MetadataModal } from "./components/MetadataModal";
 import { PreviewPanel } from "./components/PreviewPanel";
 import { VolumesPanel } from "./components/VolumesPanel";
 import { MergeModal } from "./components/MergeModal";
-import { ImportTxtModal } from "./components/ImportTxtModal";
+import { CreateEpubModal } from "./components/CreateEpubModal";
 import { EmbedFontModal } from "./components/EmbedFontModal";
 import { OptimizeModal } from "./components/OptimizeModal";
 import { FindReplaceModal } from "./components/FindReplaceModal";
 import { RepairModal } from "./components/RepairModal";
 import { GalleryModal } from "./components/GalleryModal";
-import { MangaModal } from "./components/MangaModal";
 import { api, normalizeAnalysis, readError } from "./lib/api";
 import { useAppStore } from "./lib/appStore";
 import { formatBytes } from "./lib/format";
@@ -73,7 +72,6 @@ function App() {
   const [findReplaceOpen, setFindReplaceOpen] = useState(false);
   const [repairOpen, setRepairOpen] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
-  const [mangaOpen, setMangaOpen] = useState(false);
 
   useEffect(() => {
     refreshBooks();
@@ -429,7 +427,6 @@ function App() {
         onToggle={() => setSidebarCollapsed((current) => !current)}
         onMergeClick={() => setMergeOpen(true)}
         onImportTxtClick={() => setImportOpen(true)}
-        onMangaClick={() => setMangaOpen(true)}
         onUploadBooks={handleUploadBooks}
         onDeleteBook={handleDeleteBook}
         onDeleteBooks={handleDeleteBooks}
@@ -558,7 +555,7 @@ function App() {
         onSetError={setError}
       />
 
-      <ImportTxtModal
+      <CreateEpubModal
         open={importOpen}
         onClose={() => setImportOpen(false)}
         onImportSuccess={handleImportSuccess}
@@ -660,13 +657,6 @@ function App() {
           }}
         />
       )}
-      <MangaModal
-        open={mangaOpen}
-        onClose={() => setMangaOpen(false)}
-        onImportSuccess={handleImportSuccess}
-        onSetBusy={setBusy}
-        onSetError={setError}
-      />
     </main>
   );
 }

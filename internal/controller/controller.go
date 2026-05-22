@@ -306,6 +306,61 @@ func (c *Controller) ImportTxt(w http.ResponseWriter, r *http.Request) {
 	utils.WriteJSON(w, map[string]any{"success": true, "fileName": fileName}, err)
 }
 
+func (c *Controller) CreateEpub(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := r.ParseMultipartForm(500 << 20); err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	payload := r.FormValue("payload")
+	if payload == "" {
+		http.Error(w, "payload is required", http.StatusBadRequest)
+		return
+	}
+
+	var req models.CreateEpubRequest
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	imagesByChapter := make(map[string][]models.UploadedMangaImage)
+	if r.MultipartForm != nil {
+		for key, files := range r.MultipartForm.File {
+			if !strings.HasPrefix(key, "images_") {
+				continue
+			}
+			chapterID := strings.TrimPrefix(key, "images_")
+			for _, fh := range files {
+				f, err := fh.Open()
+				if err != nil {
+					utils.WriteError(w, err)
+					return
+				}
+				var buf bytes.Buffer
+				_, err = io.Copy(&buf, f)
+				f.Close()
+				if err != nil {
+					utils.WriteError(w, err)
+					return
+				}
+				imagesByChapter[chapterID] = append(imagesByChapter[chapterID], models.UploadedMangaImage{
+					Filename: fh.Filename,
+					Data:     buf.Bytes(),
+				})
+			}
+		}
+	}
+
+	fileName, err := c.service.CreateEpub(req, imagesByChapter)
+	utils.WriteJSON(w, map[string]any{"success": true, "fileName": fileName}, err)
+}
+
 func (c *Controller) EmbedFont(id string, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)

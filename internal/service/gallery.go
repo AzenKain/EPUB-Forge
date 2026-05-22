@@ -179,7 +179,7 @@ func (s *Service) SaveGallery(id string, req models.SaveGalleryRequest) (models.
       align-items: center;
     }
     .gallery-item {
-      max-width: 100%;
+      max-width: 100%%;
       text-align: center;
       page-break-inside: avoid;
     }

@@ -36,6 +36,34 @@ interface SplitHTML {
   footer: string;     
 }
 
+type AlignState = "left" | "center" | "right" | "justify" | "";
+
+function normalizeTextAlign(value: string): AlignState {
+  if (value === "start") return "left";
+  if (value === "end") return "right";
+  if (value === "left" || value === "center" || value === "right" || value === "justify") return value;
+  return "";
+}
+
+function detectEditorAlignment(root: HTMLElement | null): AlignState {
+  if (!root) return "";
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || !selection.anchorNode || !root.contains(selection.anchorNode)) {
+    return normalizeTextAlign(window.getComputedStyle(root).textAlign);
+  }
+
+  let current: Node | null = selection.anchorNode.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode.parentElement;
+  while (current && current instanceof HTMLElement && current !== root) {
+    const tag = current.tagName.toLowerCase();
+    const display = window.getComputedStyle(current).display;
+    if (/^h[1-6]$/.test(tag) || ["p", "div", "li", "td", "th", "blockquote"].includes(tag) || display === "block" || display === "list-item") {
+      return normalizeTextAlign(window.getComputedStyle(current).textAlign);
+    }
+    current = current.parentElement;
+  }
+
+  return normalizeTextAlign(window.getComputedStyle(root).textAlign);
+}
 
 function highlightHTML(code: string): string {
   const tokenRegex = /(<!--[\s\S]*?-->)|(<\?xml[\s\S]*?\?>|<\![a-zA-Z]+[\s\S]*?>)|(<\/?[a-zA-Z0-9:-]+(?:\s+[a-zA-Z0-9:-]+(?:=(?:["'].*?["']|[^>\s]+))?)*\s*\/?>)/g;
@@ -111,6 +139,48 @@ function parseChapterHTML(html: string): SplitHTML {
   };
 }
 
+function prettyHTML(source: string): string {
+  const tokens = source
+    .replace(/>\s+</g, "><")
+    .replace(/(<[^>]+>)/g, "\n$1\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const inlineTags = new Set(["a", "abbr", "b", "br", "cite", "code", "em", "i", "span", "strong", "sub", "sup", "time", "u"]);
+  const lines: string[] = [];
+  let indent = 0;
+
+  for (const token of tokens) {
+    const closeMatch = token.match(/^<\/([a-zA-Z0-9:-]+)>/);
+    const openMatch = token.match(/^<([a-zA-Z0-9:-]+)(?:\s|>|\/)/);
+    const isClosing = Boolean(closeMatch);
+    const isComment = token.startsWith("<!--");
+    const isDoctype = /^<!/i.test(token) && !isComment;
+    const isProcessing = token.startsWith("<?");
+    const isSelfClosing = /\/>$/.test(token) || isDoctype || isProcessing || isComment;
+    const tagName = (closeMatch?.[1] || openMatch?.[1] || "").toLowerCase();
+    const isInline = inlineTags.has(tagName);
+
+    if (isClosing && !isInline) {
+      indent = Math.max(0, indent - 1);
+    }
+
+    const previous = lines[lines.length - 1] || "";
+    if (isInline && previous.trim() && !previous.trim().startsWith("<p") && !previous.trim().startsWith("<h")) {
+      lines[lines.length - 1] = previous + token;
+    } else {
+      lines.push(`${"  ".repeat(indent)}${token}`);
+    }
+
+    if (openMatch && !isClosing && !isSelfClosing && !isInline) {
+      indent += 1;
+    }
+  }
+
+  return lines.join("\n");
+}
+
 function resolveZipHref(baseDir: string, href: string): string {
   if (/^(https?:)?\/\//i.test(href) || href.startsWith("data:") || href.startsWith("#")) {
     return href;
@@ -179,6 +249,81 @@ function restoreHTMLAssetLinks(source: string, bookId: string, baseDir: string):
   });
 }
 
+const ALIGN_BLOCK_SELECTOR = "h1,h2,h3,h4,h5,h6,p,div,li,td,th,blockquote";
+
+function isMeaningfulAlign(value: string) {
+  return value === "left" || value === "center" || value === "right" || value === "justify";
+}
+
+function blockSignature(el: Element) {
+  return (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+async function applyRenderedAlignmentToBody(bodyHTML: string, previewUrl: string): Promise<string> {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<body>${bodyHTML}</body>`, "text/html");
+  const editableBlocks = Array.from(doc.body.querySelectorAll<HTMLElement>(ALIGN_BLOCK_SELECTOR));
+  if (editableBlocks.length === 0) {
+    return bodyHTML;
+  }
+
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.left = "-10000px";
+  iframe.style.top = "-10000px";
+  iframe.style.width = "900px";
+  iframe.style.height = "1200px";
+  iframe.style.opacity = "0";
+  iframe.style.pointerEvents = "none";
+  iframe.setAttribute("aria-hidden", "true");
+
+  try {
+    document.body.appendChild(iframe);
+    await new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => reject(new Error("alignment probe timeout")), 3000);
+      iframe.onload = () => {
+        window.setTimeout(() => {
+          window.clearTimeout(timeout);
+          resolve();
+        }, 120);
+      };
+      iframe.src = previewUrl;
+    });
+
+    const renderedDoc = iframe.contentDocument;
+    if (!renderedDoc?.body) {
+      return bodyHTML;
+    }
+
+    const renderedBlocks = Array.from(renderedDoc.body.querySelectorAll<HTMLElement>(ALIGN_BLOCK_SELECTOR));
+    const alignBySignature = new Map<string, string>();
+    renderedBlocks.forEach((block) => {
+      const sig = blockSignature(block);
+      const align = normalizeTextAlign(window.getComputedStyle(block).textAlign);
+      if (sig && isMeaningfulAlign(align)) {
+        alignBySignature.set(sig, align);
+      }
+    });
+
+    editableBlocks.forEach((block, index) => {
+      const rendered = renderedBlocks[index];
+      const align =
+        alignBySignature.get(blockSignature(block)) ||
+        (rendered ? normalizeTextAlign(window.getComputedStyle(rendered).textAlign) : "");
+
+      if (isMeaningfulAlign(align)) {
+        block.style.textAlign = align;
+      }
+    });
+
+    return doc.body.innerHTML;
+  } catch {
+    return bodyHTML;
+  } finally {
+    iframe.remove();
+  }
+}
+
 export function EditChapterModal({
   open,
   bookId,
@@ -194,6 +339,7 @@ export function EditChapterModal({
   if (!open) return null;
 
   const baseDir = chapterPath ? chapterPath.split('/').slice(0, -1).join('/') : "";
+  const renderedPreviewUrl = `/api/epubs/${encodeURIComponent(bookId)}/chapters/${chapterIndex}/html`;
 
   const [activeTab, setActiveTab] = useState<"visual" | "raw">("visual");
   const [rawContent, setRawContent] = useState("");
@@ -214,6 +360,7 @@ export function EditChapterModal({
   const [smartQuotes, setSmartQuotes] = useState(true);
   const [normalizeTones, setNormalizeTones] = useState(true);
   const [fixSpacing, setFixSpacing] = useState(true);
+  const [activeAlign, setActiveAlign] = useState<AlignState>("");
 
   const handleCleanContent = async () => {
     let currentRaw = rawContent;
@@ -324,12 +471,13 @@ export function EditChapterModal({
           if (!res.ok) throw new Error("Không thể tải nội dung chương");
           return res.text();
         })
-        .then((text) => {
+        .then(async (text) => {
           const parts = parseChapterHTML(text);
           const styleRegex = /<style[^>]*>[\s\S]*?<\/style>/gi;
           const matches = parts.bodyContent.match(styleRegex) || [];
           const extractedStyles = matches.join("\n");
-          const cleanBody = parts.bodyContent.replace(styleRegex, "");
+          let cleanBody = parts.bodyContent.replace(styleRegex, "");
+          cleanBody = await applyRenderedAlignmentToBody(cleanBody, renderedPreviewUrl);
           
           setStyleBlocks(extractedStyles);
           setParsedParts({
@@ -351,8 +499,17 @@ export function EditChapterModal({
     if (activeTab === "visual" && visualEditorRef.current && parsedParts) {
       const rewrittenContent = rewriteHTMLAssetLinks(parsedParts.bodyContent, bookId, baseDir);
       visualEditorRef.current.innerHTML = rewrittenContent;
+      setActiveAlign(detectEditorAlignment(visualEditorRef.current));
     }
   }, [activeTab, parsedParts]);
+
+  useEffect(() => {
+    if (!open || activeTab !== "visual") return;
+    const updateAlign = () => setActiveAlign(detectEditorAlignment(visualEditorRef.current));
+    document.addEventListener("selectionchange", updateAlign);
+    updateAlign();
+    return () => document.removeEventListener("selectionchange", updateAlign);
+  }, [open, activeTab, chapterIndex]);
 
   const syncVisualToRaw = () => {
     if (visualEditorRef.current && parsedParts) {
@@ -373,6 +530,7 @@ export function EditChapterModal({
 
     if (activeTab === "visual" && tab === "raw") {
       syncVisualToRaw();
+      setTimeout(() => setRawContent((current) => prettyHTML(current)), 0);
     } else if (activeTab === "raw" && tab === "visual") {
       const parts = parseChapterHTML(rawContent);
       const styleRegex = /<style[^>]*>[\s\S]*?<\/style>/gi;
@@ -392,6 +550,7 @@ export function EditChapterModal({
   const execCmd = (command: string, value: string = "") => {
     document.execCommand(command, false, value);
     visualEditorRef.current?.focus();
+    window.setTimeout(() => setActiveAlign(detectEditorAlignment(visualEditorRef.current)), 0);
   };
 
   const handleSave = async () => {
@@ -558,7 +717,7 @@ export function EditChapterModal({
           .visual-editor-scrollable {
             flex: 1;
             padding: 18px;
-            background: #f6f4ef;
+            background: #f5f2e9;
             overflow: auto;
             display: flex;
             justify-content: center;
@@ -569,7 +728,7 @@ export function EditChapterModal({
           .visual-editor-paper {
             width: 100%;
             max-width: 780px;
-            background: #ffffff;
+            background: #fcfaf2;
             border: 1px solid #e2dfd6;
             border-radius: 6px;
             box-shadow: 0 4px 12px rgba(23, 32, 28, 0.05);
@@ -583,12 +742,12 @@ export function EditChapterModal({
             flex: 1;
             width: 100%;
             min-height: 100%;
-            padding: 28px 36px;
+            padding: 24px 32px;
             outline: none;
-            font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
-            font-size: 15px;
-            line-height: 1.85;
-            color: #17201c;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 115%;
+            line-height: 1.7;
+            color: #2b2a27;
             box-sizing: border-box;
           }
           
@@ -616,28 +775,10 @@ export function EditChapterModal({
           
           .visual-editor-content p {
             margin: 0 0 14px 0 !important;
-            line-height: 1.85 !important;
+            line-height: 1.7 !important;
             text-indent: 0 !important;
           }
-          
-          .visual-editor-content h2 {
-            font-size: 22px !important;
-            font-weight: bold !important;
-            margin: 1.6em 0 0.8em 0 !important;
-            text-align: center !important;
-            color: #1f624d !important;
-            font-family: Inter, system-ui, -apple-system, sans-serif !important;
-          }
-          
-          .visual-editor-content h4 {
-            font-size: 16px !important;
-            font-weight: bold !important;
-            margin: 1.4em 0 0.6em 0 !important;
-            color: #2f7d69 !important;
-            font-family: Inter, system-ui, -apple-system, sans-serif !important;
-            text-align: left !important;
-          }
-          
+
           .visual-editor-content ul, 
           .visual-editor-content ol {
             margin: 0 0 14px 24px !important;
@@ -647,6 +788,9 @@ export function EditChapterModal({
           .visual-editor-content img {
             max-width: 100% !important;
             height: auto !important;
+            object-fit: contain !important;
+            display: block !important;
+            margin: 8px auto !important;
           }
           
           /* Highlighter Styles */
@@ -895,7 +1039,7 @@ export function EditChapterModal({
               <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0 }}>
                 {activeTab === "visual" ? (
                   <div className="visual-editor-container" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-                    <div className="editor-toolbar">
+                    <div className="editor-toolbar" onMouseDown={(event) => event.preventDefault()}>
                       <button
                         type="button"
                         className="toolbar-btn"
@@ -960,7 +1104,7 @@ export function EditChapterModal({
 
                       <button
                         type="button"
-                        className="toolbar-btn"
+                        className={`toolbar-btn ${activeAlign === "left" ? "active" : ""}`}
                         onClick={() => execCmd("justifyLeft")}
                         title="Căn lề trái"
                       >
@@ -968,7 +1112,7 @@ export function EditChapterModal({
                       </button>
                       <button
                         type="button"
-                        className="toolbar-btn"
+                        className={`toolbar-btn ${activeAlign === "center" ? "active" : ""}`}
                         onClick={() => execCmd("justifyCenter")}
                         title="Căn giữa"
                       >
@@ -976,7 +1120,7 @@ export function EditChapterModal({
                       </button>
                       <button
                         type="button"
-                        className="toolbar-btn"
+                        className={`toolbar-btn ${activeAlign === "right" ? "active" : ""}`}
                         onClick={() => execCmd("justifyRight")}
                         title="Căn lề phải"
                       >
@@ -1025,6 +1169,16 @@ export function EditChapterModal({
                         <Sparkles size={14} style={{ marginRight: "4px" }} />
                         <span>Dọn dẹp chương</span>
                       </button>
+                      <button
+                        type="button"
+                        className="toolbar-btn"
+                        onClick={() => setRawContent((current) => prettyHTML(current))}
+                        title="Format lại HTML"
+                        style={{ width: "auto", padding: "0 8px", fontSize: "11px", fontWeight: "bold" }}
+                      >
+                        <FileCode size={14} style={{ marginRight: "4px" }} />
+                        <span>Format HTML</span>
+                      </button>
                     </div>
 
                     <div className="visual-editor-scrollable">
@@ -1034,6 +1188,9 @@ export function EditChapterModal({
                           className="visual-editor-content"
                           contentEditable={true}
                           suppressContentEditableWarning={true}
+                          onInput={() => setActiveAlign(detectEditorAlignment(visualEditorRef.current))}
+                          onKeyUp={() => setActiveAlign(detectEditorAlignment(visualEditorRef.current))}
+                          onMouseUp={() => setActiveAlign(detectEditorAlignment(visualEditorRef.current))}
                         />
                       </div>
                     </div>

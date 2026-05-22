@@ -105,6 +105,24 @@ type ImportTxtRequest struct {
 	Content      string `json:"content"`
 }
 
+type CreateEpubRequest struct {
+	Title     string              `json:"title"`
+	Author    string              `json:"author"`
+	Metadata  BookMetadata        `json:"metadata"`
+	Direction string              `json:"direction"`
+	Chapters  []CreateEpubChapter `json:"chapters"`
+}
+
+type CreateEpubChapter struct {
+	ID             string   `json:"id"`
+	Title          string   `json:"title"`
+	Mode           string   `json:"mode"`
+	Text           string   `json:"text"`
+	RawHTML        bool     `json:"rawHtml"`
+	MangaDirection string   `json:"mangaDirection"`
+	ImageFileNames []string `json:"imageFileNames"`
+}
+
 type OptimizeResponse struct {
 	Success         bool     `json:"success"`
 	OriginalSize    int64    `json:"originalSize"`
@@ -132,9 +150,9 @@ type OptimizeRequest struct {
 
 type FindRequest struct {
 	Query         string `json:"query"`
-	Mode          string `json:"mode"`         
-	Scope         string `json:"scope"`       
-	ChapterIndex  int    `json:"chapterIndex"`  
+	Mode          string `json:"mode"`
+	Scope         string `json:"scope"`
+	ChapterIndex  int    `json:"chapterIndex"`
 	CaseSensitive bool   `json:"caseSensitive"`
 	DotAll        bool   `json:"dotAll"`
 }
@@ -200,4 +218,3 @@ type UploadedMangaImage struct {
 	Filename string
 	Data     []byte
 }
-
