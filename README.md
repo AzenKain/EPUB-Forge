@@ -15,7 +15,10 @@ Built with a high-performance **Go backend** and a modern, high-fidelity **React
 - **✍️ Dual-Engine Chapter Editor**:
   - **Visual WYSIWYG Editor**: Write, edit, and style chapters directly with clean typography and layout preservation.
   - **Syntax-Highlighted HTML Code Editor**: Write precise HTML with raw, real-time XML/HTML syntax highlighting, custom indent options, and scroll syncing.
+  - **🇻🇳 Vietnamese Typography Normalizer**: Auto-correct spacing, smart curly quotes (“...”), and modern tone mark placements (e.g., `hoà` -> `hòa`) in both visual/code editors and bulk book optimizations.
 - **🖼️ Image Cover Studio**: Configure covers per-volume. Choose between local file upload, pasting direct web URLs, or selecting high-resolution illustration assets straight from inside the book.
+- **🎨 Custom Illustration Gallery**: Select specific images inside the book, drag-and-drop to reorder them, write custom captions, and compile them into a beautifully structured, compliant `gallery.xhtml` page with automated manifest & TOC registration.
+- **📖 Pre-paginated Manga EPUB Builder**: A dedicated dashboard to upload manga or comic images, arrange their order, select reading direction (RTL/LTR), and export them as professional, pre-paginated fixed-layout Manga EPUBs.
 - **⚡ Native Performance**: Built on Go's lightning-fast ZIP streaming and DOM parsing engine. Works offline, completely self-contained.
 
 ---
