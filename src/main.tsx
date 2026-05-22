@@ -9,6 +9,7 @@ import { VolumesPanel } from "./components/VolumesPanel";
 import { MergeModal } from "./components/MergeModal";
 import { CreateEpubModal } from "./components/CreateEpubModal";
 import { EmbedFontModal } from "./components/EmbedFontModal";
+import { ExtensionsModal } from "./components/ExtensionsModal";
 import { OptimizeModal } from "./components/OptimizeModal";
 import { FindReplaceModal } from "./components/FindReplaceModal";
 import { RepairModal } from "./components/RepairModal";
@@ -72,6 +73,7 @@ function App() {
   const [findReplaceOpen, setFindReplaceOpen] = useState(false);
   const [repairOpen, setRepairOpen] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [extensionsOpen, setExtensionsOpen] = useState(false);
 
   useEffect(() => {
     refreshBooks();
@@ -259,8 +261,8 @@ function App() {
   }
 
   async function handleMergeSuccess(newFileName: string) {
-    setNotice(`Đã gộp thành công các tệp EPUB thành "${newFileName}".`);
     await refreshBooks();
+    setNotice(`Đã gộp thành công các tệp EPUB thành "${newFileName}".`);
     
     const toID = (name: string) => {
       const utf8Bytes = new TextEncoder().encode(name);
@@ -277,8 +279,8 @@ function App() {
   }
 
   async function handleImportSuccess(newFileName: string) {
-    setNotice(`Đã tạo và nhập thành công truyện thành tệp EPUB "${newFileName}".`);
     await refreshBooks();
+    setNotice(`Đã tạo và nhập thành công truyện thành tệp EPUB "${newFileName}".`);
     
     const toID = (name: string) => {
       const utf8Bytes = new TextEncoder().encode(name);
@@ -292,6 +294,30 @@ function App() {
         .replace(/=+$/, "");
     };
     setSelectedId(toID(newFileName));
+  }
+
+  async function handleExtensionRunSuccess(fileNames: string[]) {
+    await refreshBooks();
+    if (fileNames.length === 1) {
+      setNotice(`Đã chạy thành công! Đã tạo tệp EPUB "${fileNames[0]}".`);
+    } else if (fileNames.length > 1) {
+      setNotice(`Đã chạy thành công! Đã tạo ${fileNames.length} tệp EPUB: ${fileNames.join(", ")}.`);
+    }
+    
+    if (fileNames.length > 0) {
+      const toID = (name: string) => {
+        const utf8Bytes = new TextEncoder().encode(name);
+        let binary = "";
+        for (let i = 0; i < utf8Bytes.length; i++) {
+          binary += String.fromCharCode(utf8Bytes[i]);
+        }
+        return btoa(binary)
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+      };
+      setSelectedId(toID(fileNames[0]));
+    }
   }
 
   async function handleUploadBooks(files: File[]) {
@@ -319,8 +345,8 @@ function App() {
         })
       );
 
-      setNotice(`Đã thêm thành công ${files.length} sách.`);
       await refreshBooks();
+      setNotice(`Đã thêm thành công ${files.length} sách.`);
 
       const lastUploadedName = results[results.length - 1];
       if (lastUploadedName) {
@@ -361,8 +387,6 @@ function App() {
         throw new Error(errorData.error || response.statusText);
       }
 
-      setNotice(`Đã xoá sách "${name}" thành công.`);
-      
       const remainingBooks = books.filter(b => b.id !== id);
       if (selectedId === id) {
         setSelectedId(remainingBooks[0]?.id || "");
@@ -371,6 +395,7 @@ function App() {
         }
       }
       await refreshBooks();
+      setNotice(`Đã xoá sách "${name}" thành công.`);
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -397,7 +422,6 @@ function App() {
           }
         })
       );
-      setNotice(`Đã xoá ${ids.length} sách thành công.`);
       
       const remainingBooks = books.filter(b => !ids.includes(b.id));
       if (ids.includes(selectedId)) {
@@ -408,6 +432,7 @@ function App() {
       }
       
       await refreshBooks();
+      setNotice(`Đã xoá ${ids.length} sách thành công.`);
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -427,6 +452,7 @@ function App() {
         onToggle={() => setSidebarCollapsed((current) => !current)}
         onMergeClick={() => setMergeOpen(true)}
         onImportTxtClick={() => setImportOpen(true)}
+        onExtensionsClick={() => setExtensionsOpen(true)}
         onUploadBooks={handleUploadBooks}
         onDeleteBook={handleDeleteBook}
         onDeleteBooks={handleDeleteBooks}
@@ -561,6 +587,12 @@ function App() {
         onImportSuccess={handleImportSuccess}
         onSetBusy={setBusy}
         onSetError={setError}
+      />
+
+      <ExtensionsModal
+        open={extensionsOpen}
+        onClose={() => setExtensionsOpen(false)}
+        onRunSuccess={handleExtensionRunSuccess}
       />
 
       {analysis && (

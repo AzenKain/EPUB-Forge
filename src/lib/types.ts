@@ -89,3 +89,19 @@ export type GalleryResponse = {
   availableImages: GalleryImage[];
   selectedImages: GalleryImage[];
 };
+
+export type ExtensionInput = {
+  id: string;
+  type: "text" | "number" | "boolean" | "password";
+  label: string;
+  placeholder?: string;
+  defaultValue?: any;
+  required?: boolean;
+};
+
+export type ExtensionInfo = {
+  id: string;
+  name: string;
+  description: string;
+  inputs: ExtensionInput[];
+};

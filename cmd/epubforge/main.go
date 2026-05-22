@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"epubforge/internal/router"
@@ -35,7 +38,25 @@ func main() {
 		}()
 	}
 
-	if err := http.ListenAndServe(addr, router.New(svc, embeddedDist)); err != nil {
+	server := &http.Server{
+		Addr:    addr,
+		Handler: router.New(svc, embeddedDist),
+	}
+
+	// Graceful shutdown on Ctrl+C / SIGTERM
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-quit
+		log.Println("Shutting down...")
+		svc.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+	}()
+
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

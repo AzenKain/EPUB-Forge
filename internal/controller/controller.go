@@ -495,3 +495,180 @@ func (c *Controller) CreateManga(w http.ResponseWriter, r *http.Request) {
 
 	utils.WriteJSON(w, map[string]any{"success": true, "fileName": outputName}, nil)
 }
+
+func (c *Controller) ListExtensions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	exts, err := c.service.ListExtensions()
+	utils.WriteJSON(w, exts, err)
+}
+
+func (c *Controller) RunExtension(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "id query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	var inputs map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&inputs); err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, _ := w.(http.Flusher)
+	logWriter := &responseLogWriter{w: w, flusher: flusher}
+
+	fileNames, err := c.service.RunExtension(r.Context(), id, inputs, logWriter)
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"type":  "error",
+			"error": err.Error(),
+		})
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"type":      "done",
+		"fileNames": fileNames,
+		"fileName":  strings.Join(fileNames, ", "),
+	})
+}
+
+type responseLogWriter struct {
+	w       http.ResponseWriter
+	flusher http.Flusher
+}
+
+func (rlw *responseLogWriter) Write(p []byte) (n int, err error) {
+	trimmed := bytes.TrimSpace(p)
+	if len(trimmed) > 1 && trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}' {
+		var js json.RawMessage
+		if json.Unmarshal(trimmed, &js) == nil {
+			_, err = rlw.w.Write(p)
+			if err == nil && rlw.flusher != nil {
+				rlw.flusher.Flush()
+			}
+			return len(p), err
+		}
+	}
+
+	msg := map[string]any{
+		"type":    "log",
+		"message": strings.TrimSuffix(string(p), "\n"),
+	}
+	err = json.NewEncoder(rlw.w).Encode(msg)
+	if err == nil && rlw.flusher != nil {
+		rlw.flusher.Flush()
+	}
+	return len(p), err
+}
+
+func (c *Controller) UploadExtension(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	err := r.ParseMultipartForm(5 << 20) // 5MB max
+	if err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "file is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	if !strings.HasSuffix(strings.ToLower(header.Filename), ".js") {
+		http.Error(w, "Chỉ chấp nhận tệp tin .js", http.StatusBadRequest)
+		return
+	}
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, file)
+	if err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	info, err := c.service.AddExtension(buf.Bytes())
+	utils.WriteJSON(w, info, err)
+}
+
+func (c *Controller) DeleteExtension(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+			id = req.ID
+		}
+	}
+
+	if id == "" {
+		http.Error(w, "yêu cầu tham số id", http.StatusBadRequest)
+		return
+	}
+
+	err := c.service.DeleteExtension(id)
+	utils.WriteJSON(w, map[string]any{"success": true}, err)
+}
+
+func (c *Controller) InteractExtension(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		RunID  string  `json:"runId"`
+		Action string  `json:"action"`
+		X      float64 `json:"x"`
+		Y      float64 `json:"y"`
+		Text   string  `json:"text"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	if req.RunID == "" {
+		http.Error(w, "runId is required", http.StatusBadRequest)
+		return
+	}
+
+	screenshot, err := c.service.InteractExtension(req.RunID, req.Action, req.X, req.Y, req.Text)
+	if err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	utils.WriteJSON(w, map[string]any{
+		"success":    true,
+		"screenshot": screenshot,
+	}, nil)
+}
+

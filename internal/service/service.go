@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -22,6 +23,8 @@ import (
 	"sync"
 
 	"epubforge/internal/models"
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
 )
 
 type EpubFile = models.EpubFile
@@ -41,6 +44,13 @@ type volumeStart struct {
 	reason     string
 	confidence string
 	index      int
+}
+
+type ActiveRun struct {
+	Page      *rod.Page
+	SessionID string
+	Cancel    context.CancelFunc
+	Mu        sync.Mutex
 }
 
 var (
@@ -73,8 +83,12 @@ var (
 )
 
 type Service struct {
-	bookMu sync.Mutex
-	locks  map[string]*sync.Mutex
+	bookMu       sync.Mutex
+	locks        map[string]*sync.Mutex
+	browser      *rod.Browser
+	launcher     *launcher.Launcher
+	activeRuns   map[string]*ActiveRun
+	activeRunsMu sync.RWMutex
 }
 
 func New(workspaceDir string) (*Service, error) {
@@ -88,7 +102,8 @@ func New(workspaceDir string) (*Service, error) {
 		return nil, err
 	}
 	return &Service{
-		locks: make(map[string]*sync.Mutex),
+		locks:      make(map[string]*sync.Mutex),
+		activeRuns: make(map[string]*ActiveRun),
 	}, nil
 }
 

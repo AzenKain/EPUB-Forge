@@ -19,6 +19,10 @@ Built with a high-performance **Go backend** and a modern, high-fidelity **React
 - **🖼️ Image Cover Studio**: Configure covers per-volume. Choose between local file upload, pasting direct web URLs, or selecting high-resolution illustration assets straight from inside the book.
 - **🎨 Custom Illustration Gallery**: Select specific images inside the book, drag-and-drop to reorder them, write custom captions, and compile them into a beautifully structured, compliant `gallery.xhtml` page with automated manifest & TOC registration.
 - **📖 Pre-paginated Manga EPUB Builder**: A dedicated dashboard to upload manga or comic images, arrange their order, select reading direction (RTL/LTR), and export them as professional, pre-paginated fixed-layout Manga EPUBs.
+- **🔌 Extensible Script Runner (Extension Center)**: Run custom Javascript scraper extensions (`.js` files inside the `extensions/` directory) to crawl web novels and compile them into EPUBs directly.
+  - **Headless Browser Control**: Runs on a stealth headless browser powered by Go-Rod.
+  - **Cloudflare Bypass & Captcha Solver**: Stream screenshots of Cloudflare turnstile and captchas into the React modal. Solves interactive triggers by clicking or typing text inputs directly inside the UI.
+  - **Multi-Volume Support**: Generates multiple EPUB volumes at once (e.g. for series divided into multiple volumes/vols) depending on the extension return values.
 - **⚡ Native Performance**: Built on Go's lightning-fast ZIP streaming and DOM parsing engine. Works offline, completely self-contained.
 
 ---
@@ -100,6 +104,14 @@ npm run build
 # 2. Run the Go server directly using local files
 npm run native
 ```
+
+---
+
+## 🔌 Custom Extensions
+
+You can write custom Javascript crawler extensions to scrape external sites and automatically generate EPUB books.
+
+For full developer instructions on extension structure, inputs schema, browser control APIs, and return format, see the [Extension Developer Guide](file:///e:/epub_forge/EXTENSION_GUIDE.md).
 
 ---
 

@@ -111,6 +111,7 @@ type CreateEpubRequest struct {
 	Metadata  BookMetadata        `json:"metadata"`
 	Direction string              `json:"direction"`
 	Chapters  []CreateEpubChapter `json:"chapters"`
+	Assets    map[string]string   `json:"assets,omitempty"`
 }
 
 type CreateEpubChapter struct {

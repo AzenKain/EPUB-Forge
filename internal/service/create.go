@@ -3,6 +3,7 @@ package service
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/base64"
 	"epubforge/internal/models"
 	"errors"
 	"fmt"
@@ -11,7 +12,9 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -107,11 +110,82 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 		{ID: "ncx", Href: "toc.ncx", MediaType: "application/x-dtbncx+xml"},
 		{ID: "style", Href: "Styles/style.css", MediaType: "text/css"},
 	}
+
+	// Write extra assets if provided (e.g., custom images or styling from extensions)
+	for path, base64Data := range req.Assets {
+		cleanPath := strings.ReplaceAll(path, "\\", "/")
+		cleanPath = strings.TrimPrefix(cleanPath, "/")
+
+		var dataBytes []byte
+		var err error
+		if idx := strings.Index(base64Data, ";base64,"); idx != -1 {
+			dataBytes, err = base64.StdEncoding.DecodeString(base64Data[idx+8:])
+		} else {
+			dataBytes, err = base64.StdEncoding.DecodeString(base64Data)
+		}
+		if err != nil {
+			continue // skip invalid assets
+		}
+
+		if err := writeZipBytes(zw, "OEBPS/"+cleanPath, dataBytes); err != nil {
+			return "", err
+		}
+
+		mime := contentTypeFor(cleanPath)
+		cleanID := strings.NewReplacer("/", "_", ".", "_", "-", "_", " ", "_").Replace(cleanPath)
+		manifest = append(manifest, createManifestItem{
+			ID:        "asset_" + cleanID,
+			Href:      cleanPath,
+			MediaType: mime,
+		})
+	}
+
 	if coverItem.ID != "" {
 		manifest = append(manifest, coverItem)
 	}
 	var spine []createSpineItem
 	var toc []createSpineItem
+
+	// 1. Cover Page
+	if coverItem.ID != "" {
+		coverPageHref := "Text/titlepage.xhtml"
+		coverPageID := "titlepage"
+		coverPageHTML := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <title>Cover</title>
+  <style type="text/css">
+    body { margin: 0; padding: 0; text-align: center; background-color: #ffffff; }
+    div.cover { margin: 0; padding: 0; text-align: center; }
+    img.cover { max-width: 100%%; max-height: 100%%; height: auto; }
+  </style>
+</head>
+<body>
+  <div class="cover">
+    <img class="cover" src="../%s" alt="Cover" />
+  </div>
+</body>
+</html>`, coverItem.Href)
+
+		if err := writeZipText(zw, "OEBPS/"+coverPageHref, coverPageHTML); err != nil {
+			return "", fmt.Errorf("không thể ghi trang bìa: %w", err)
+		}
+
+		manifest = append(manifest, createManifestItem{ID: coverPageID, Href: coverPageHref, MediaType: "application/xhtml+xml"})
+		spine = append(spine, createSpineItem{ID: coverPageID, Href: coverPageHref, Title: "Cover"})
+		toc = append(toc, createSpineItem{ID: coverPageID, Href: coverPageHref, Title: "Cover"})
+	}
+
+	// 2. Visible TOC Page (index.html) placeholder in spine and toc
+	tocPageHref := "Text/index.html"
+	tocPageID := "index_html"
+	spine = append(spine, createSpineItem{ID: tocPageID, Href: tocPageHref, Title: title})
+	toc = append(toc, createSpineItem{ID: tocPageID, Href: tocPageHref, Title: title})
+
+	// 3. Chapters
+	var chapterSpineItems []createSpineItem
+	var actualChaptersToc []createSpineItem
 
 	for idx, chapter := range req.Chapters {
 		chapterTitle := strings.TrimSpace(chapter.Title)
@@ -129,8 +203,8 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 				return "", fmt.Errorf("chương %q chưa có ảnh manga", chapterTitle)
 			}
 			manifest = append(manifest, items...)
-			spine = append(spine, pages...)
-			toc = append(toc, createSpineItem{ID: pages[0].ID, Href: pages[0].Href, Title: chapterTitle})
+			chapterSpineItems = append(chapterSpineItems, pages...)
+			actualChaptersToc = append(actualChaptersToc, createSpineItem{ID: pages[0].ID, Href: pages[0].Href, Title: chapterTitle})
 			if strings.ToLower(chapter.MangaDirection) == "rtl" {
 				direction = "rtl"
 			}
@@ -139,15 +213,83 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 
 		href := fmt.Sprintf("Text/chapter_%03d.xhtml", idx+1)
 		id := fmt.Sprintf("chapter_%03d", idx+1)
-		html := createNormalChapterHTML(chapterTitle, chapter.Text, chapter.RawHTML)
+		html := createNormalChapterHTML(chapterTitle, chapter.Text, chapter.RawHTML, req.Assets)
 		if err := writeZipText(zw, "OEBPS/"+href, html); err != nil {
 			return "", err
 		}
 		manifest = append(manifest, createManifestItem{ID: id, Href: href, MediaType: "application/xhtml+xml"})
 		item := createSpineItem{ID: id, Href: href, Title: chapterTitle}
-		spine = append(spine, item)
-		toc = append(toc, item)
+		chapterSpineItems = append(chapterSpineItems, item)
+		actualChaptersToc = append(actualChaptersToc, item)
 	}
+
+	spine = append(spine, chapterSpineItems...)
+	toc = append(toc, actualChaptersToc...)
+
+	// Now write OEBPS/Text/index.html using actualChaptersToc
+	var tocListBuilder strings.Builder
+	currentDateStr := time.Now().Format("02/01/2006")
+	for _, item := range actualChaptersToc {
+		relHref := "../" + item.Href
+		tocListBuilder.WriteString(fmt.Sprintf(`    <li>
+      <a href="%s">%s</a>
+      <div class="date">%s</div>
+    </li>`+"\n", relHref, escapeXML(item.Title), currentDateStr))
+	}
+
+	visibleTOCPageHTML := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <title>%s</title>
+  <link rel="stylesheet" type="text/css" href="../Styles/style.css" />
+  <style type="text/css">
+    body {
+      font-family: sans-serif;
+      margin: 5%%;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 1.5em;
+    }
+    ul {
+      list-style-type: none;
+      padding-left: 0;
+    }
+    li {
+      margin-bottom: 15px;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 10px;
+    }
+    a {
+      text-decoration: none;
+      color: #0066cc;
+      font-weight: bold;
+      font-size: 1.1em;
+    }
+    a:hover {
+      color: #003399;
+      text-decoration: underline;
+    }
+    .date {
+      font-size: 0.85em;
+      color: #888;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>%s</h1>
+  <ul>
+%s  </ul>
+</body>
+</html>`, escapeXML(title), escapeXML(title), tocListBuilder.String())
+
+	if err := writeZipText(zw, "OEBPS/"+tocPageHref, visibleTOCPageHTML); err != nil {
+		return "", fmt.Errorf("không thể ghi trang mục lục: %w", err)
+	}
+
+	manifest = append(manifest, createManifestItem{ID: tocPageID, Href: tocPageHref, MediaType: "application/xhtml+xml"})
 
 	if len(spine) == 0 {
 		return "", errors.New("không có nội dung hợp lệ để tạo EPUB")
@@ -219,9 +361,9 @@ func writeZipBytes(zw *zip.Writer, name string, data []byte) error {
 	return err
 }
 
-func createNormalChapterHTML(title, content string, rawHTML bool) string {
+func createNormalChapterHTML(title, content string, rawHTML bool, assets map[string]string) string {
 	if rawHTML {
-		trimmed := strings.TrimSpace(content)
+		trimmed := rewriteRawChapterAssetRefs(strings.TrimSpace(content), assets)
 		if strings.Contains(strings.ToLower(trimmed), "<html") {
 			return trimmed
 		}
@@ -239,6 +381,76 @@ func createNormalChapterHTML(title, content string, rawHTML bool) string {
 		}
 	}
 	return wrapChapterBody(title, fmt.Sprintf("  <h2>%s</h2>\n%s", escapeXML(title), body.String()))
+}
+
+var rawChapterAssetAttrRe = regexp.MustCompile(`(?is)\s(src|href|xlink:href)\s*=\s*("[^"]*"|'[^']*')`)
+
+func rewriteRawChapterAssetRefs(content string, assets map[string]string) string {
+	if len(assets) == 0 || content == "" {
+		return content
+	}
+
+	assetPaths := make(map[string]struct{}, len(assets))
+	for assetPath := range assets {
+		cleanPath := strings.TrimPrefix(strings.ReplaceAll(assetPath, "\\", "/"), "/")
+		if cleanPath != "" {
+			assetPaths[path.Clean(cleanPath)] = struct{}{}
+		}
+	}
+
+	return rawChapterAssetAttrRe.ReplaceAllStringFunc(content, func(full string) string {
+		m := rawChapterAssetAttrRe.FindStringSubmatch(full)
+		if len(m) != 3 || len(m[2]) < 2 {
+			return full
+		}
+
+		quote := m[2][:1]
+		ref := m[2][1 : len(m[2])-1]
+		if isExternalRef(ref) || strings.HasPrefix(ref, "#") {
+			return full
+		}
+
+		refPath, suffix := splitRefSuffix(strings.ReplaceAll(ref, "\\", "/"))
+		if refPath == "" {
+			return full
+		}
+
+		if target, ok := matchRawChapterAsset(refPath, assetPaths); ok {
+			rel, err := filepath.Rel(filepath.FromSlash("Text"), filepath.FromSlash(target))
+			rel = filepath.ToSlash(rel)
+			if err == nil && rel != "." && !strings.HasPrefix(rel, "../..") {
+				return fmt.Sprintf(` %s=%s%s%s%s`, m[1], quote, rel, suffix, quote)
+			}
+		}
+
+		return full
+	})
+}
+
+func splitRefSuffix(ref string) (string, string) {
+	idx := len(ref)
+	if q := strings.Index(ref, "?"); q >= 0 && q < idx {
+		idx = q
+	}
+	if h := strings.Index(ref, "#"); h >= 0 && h < idx {
+		idx = h
+	}
+	return ref[:idx], ref[idx:]
+}
+
+func matchRawChapterAsset(refPath string, assetPaths map[string]struct{}) (string, bool) {
+	cleanRef := strings.TrimPrefix(refPath, "/")
+	candidates := []string{
+		path.Clean(cleanRef),
+		path.Clean(path.Join("Text", cleanRef)),
+	}
+
+	for _, candidate := range candidates {
+		if _, ok := assetPaths[candidate]; ok {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 func wrapChapterBody(title, body string) string {

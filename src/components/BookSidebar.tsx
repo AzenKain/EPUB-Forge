@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { BookOpen, FileArchive, PanelLeftClose, PanelLeftOpen, RefreshCw, Combine, FileText, Plus, Trash2 } from "lucide-react";
+import { BookOpen, FileArchive, PanelLeftClose, PanelLeftOpen, RefreshCw, Combine, FileText, Plus, Trash2, Puzzle } from "lucide-react";
 import type { EpubFile } from "../lib/types";
 import { formatBytes } from "../lib/format";
 
@@ -13,6 +13,7 @@ type Props = {
   onToggle: () => void;
   onMergeClick: () => void;
   onImportTxtClick: () => void;
+  onExtensionsClick: () => void;
   onUploadBooks: (files: File[]) => void;
   onDeleteBook: (id: string, name: string) => void;
   onDeleteBooks: (ids: string[]) => void;
@@ -28,6 +29,7 @@ export function BookSidebar({
   onToggle,
   onMergeClick,
   onImportTxtClick,
+  onExtensionsClick,
   onUploadBooks,
   onDeleteBook,
   onDeleteBooks
@@ -118,6 +120,10 @@ export function BookSidebar({
             <span>Tạo EPUB</span>
           </button>
         </div>
+        <button className="toolButton" onClick={onExtensionsClick} disabled={busy} title="Tiện ích tải/xử lý EPUB từ website" style={{ width: "100%" }}>
+          <Puzzle size={18} />
+          <span>Tiện ích mở rộng</span>
+        </button>
       </div>
 
       {!collapsed && (
