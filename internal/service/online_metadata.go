@@ -74,7 +74,6 @@ func cleanQueryForFallback(query string) string {
 }
 
 func cleanQueryForAniList(query string) string {
-	// Remove parenthetical notes/subtitles, e.g. "(Iya, Shinai!!)" or "[LN]"
 	reParens := regexp.MustCompile(`\s*[\(\[\{].*?[\)\]\}]`)
 	cleaned := reParens.ReplaceAllString(query, "")
 
@@ -83,7 +82,6 @@ func cleanQueryForAniList(query string) string {
 
 	cleaned = strings.TrimRight(cleaned, " -:")
 
-	// Normalize spaces
 	words := strings.Fields(cleaned)
 	cleaned = strings.Join(words, " ")
 
@@ -108,14 +106,12 @@ func (s *Service) SearchMetadataOnline(query string, source string) ([]BookMetad
 			return results, nil
 		}
 
-		// Try Google Books second
 		var gbErr error
 		results, gbErr = s.searchGoogleBooks(query)
 		if gbErr == nil && len(results) > 0 {
 			return results, nil
 		}
 
-		// Try Open Library as fallback
 		cleanQuery := cleanQueryForFallback(query)
 		var olResults []BookMetadata
 		var olErr error
@@ -137,7 +133,6 @@ func (s *Service) SearchMetadataOnline(query string, source string) ([]BookMetad
 			return olResults, nil
 		}
 
-		// Collect errors to report if none of them found anything
 		if err != nil {
 			return nil, fmt.Errorf("lỗi AniList: %v", err)
 		}
@@ -254,7 +249,6 @@ query ($search: String) {
 
 	var results []BookMetadata
 	for _, media := range data.Data.Page.Media {
-		// Prefer English title, then Romaji, then Native
 		title := media.Title.English
 		if title == "" {
 			title = media.Title.Romaji
@@ -263,7 +257,6 @@ query ($search: String) {
 			title = media.Title.Native
 		}
 
-		// Collect authors
 		var creators []string
 		for _, edge := range media.Staff.Edges {
 			roleLower := strings.ToLower(edge.Role)
@@ -278,11 +271,9 @@ query ($search: String) {
 
 		subjectStr := strings.Join(media.Genres, ", ")
 
-		// Clean HTML tags from description
 		desc := media.Description
 		desc = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(desc, "")
 
-		// Determine language from country of origin
 		lang := "ja"
 		switch media.CountryOfOrigin {
 		case "KR":
@@ -293,7 +284,6 @@ query ($search: String) {
 			lang = "ja"
 		}
 
-		// Determine publisher labels based on format and country
 		pub := "AniList Database"
 		switch media.Format {
 		case "NOVEL":

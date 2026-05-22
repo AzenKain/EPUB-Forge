@@ -165,11 +165,31 @@ func randomID() string {
 
 func contentTypeFor(name string) string {
 	ext := strings.ToLower(filepath.Ext(name))
-	if ext == ".xhtml" {
+	switch ext {
+	case ".xhtml", ".html", ".htm":
 		return "application/xhtml+xml"
-	}
-	if ext == ".css" {
+	case ".css":
 		return "text/css; charset=utf-8"
+	case ".ncx":
+		return "application/x-dtbncx+xml"
+	case ".opf":
+		return "application/oebps-package+xml"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	case ".ttf":
+		return "application/x-font-ttf"
+	case ".otf":
+		return "application/x-font-opentype"
+	case ".woff":
+		return "font/woff"
+	case ".woff2":
+		return "font/woff2"
 	}
 	if ct := mime.TypeByExtension(ext); ct != "" {
 		return ct

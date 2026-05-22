@@ -16,6 +16,7 @@ func New(svc *service.Service, frontend fs.FS) *http.ServeMux {
 	mux.HandleFunc("/api/epubs/import-txt", ctrl.ImportTxt)
 	mux.HandleFunc("/api/metadata/search", ctrl.SearchMetadata)
 	mux.HandleFunc("/api/epubs/upload", ctrl.UploadEpub)
+	mux.HandleFunc("/api/epubs/create-manga", ctrl.CreateManga)
 	mux.HandleFunc("/api/epubs/", ctrl.Epub)
 	mux.HandleFunc("/api/files/", ctrl.File)
 	mux.HandleFunc("/", ctrl.Frontend)

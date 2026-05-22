@@ -86,6 +86,11 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
   const [normalizeParagraphs, setNormalizeParagraphs] = useState(true);
   const [regexFilters, setRegexFilters] = useState("");
 
+  const [normalizeTypography, setNormalizeTypography] = useState(false);
+  const [smartQuotes, setSmartQuotes] = useState(true);
+  const [normalizeTones, setNormalizeTones] = useState(true);
+  const [fixSpacing, setFixSpacing] = useState(true);
+
   if (!open) return null;
 
   const formatSize = (bytes: number) => {
@@ -118,6 +123,10 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
           removeEmptyLines,
           normalizeParagraphs,
           regexFilters: regexFilters.split("\n").map(f => f.trim()).filter(Boolean),
+          normalizeTypography,
+          smartQuotes,
+          normalizeTones,
+          fixSpacing,
         }),
       });
       if (!res.ok) {
@@ -261,6 +270,58 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
                   description="Xóa style CSS rác, thẻ trống, dòng trống thừa và chuẩn hóa thụt lề cho toàn cuốn sách."
                 />
 
+                <OptionCard
+                  checked={normalizeTypography}
+                  onChange={() => setNormalizeTypography(!normalizeTypography)}
+                  icon={Sparkles}
+                  title="Chuẩn hóa Typography Tiếng Việt"
+                  description="Tự động sửa dấu ngoặc kép thông minh, dấu thanh tiếng Việt kiểu cũ, và khoảng cách dấu câu."
+                />
+
+                {normalizeTypography && (
+                  <div
+                    style={{
+                      padding: "16px",
+                      background: "#fff",
+                      border: "1px solid #e6dfd3",
+                      borderRadius: "10px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "12px"
+                    }}
+                  >
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "24px" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", fontWeight: "500", cursor: "pointer", color: "#17201c" }}>
+                        <input
+                          type="checkbox"
+                          checked={smartQuotes}
+                          onChange={() => setSmartQuotes(!smartQuotes)}
+                          style={{ width: "16px", height: "16px", accentColor: "#2f7d69", cursor: "pointer" }}
+                        />
+                        <span>Ngoặc kép thông minh</span>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", fontWeight: "500", cursor: "pointer", color: "#17201c" }}>
+                        <input
+                          type="checkbox"
+                          checked={normalizeTones}
+                          onChange={() => setNormalizeTones(!normalizeTones)}
+                          style={{ width: "16px", height: "16px", accentColor: "#2f7d69", cursor: "pointer" }}
+                        />
+                        <span>Chuẩn hóa dấu thanh</span>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", fontWeight: "500", cursor: "pointer", color: "#17201c" }}>
+                        <input
+                          type="checkbox"
+                          checked={fixSpacing}
+                          onChange={() => setFixSpacing(!fixSpacing)}
+                          style={{ width: "16px", height: "16px", accentColor: "#2f7d69", cursor: "pointer" }}
+                        />
+                        <span>Khoảng cách dấu câu</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
+
                 {cleanHTML && (
                   <div
                     style={{
@@ -371,7 +432,7 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
                 type="button"
                 className="smallButton strong"
                 onClick={handleOptimize}
-                disabled={!cleanUnusedImages && !cleanUnusedFonts && !compressImages && !convertToWebp && !cleanHTML}
+                disabled={!cleanUnusedImages && !cleanUnusedFonts && !compressImages && !convertToWebp && !cleanHTML && !normalizeTypography}
                 style={{
                   width: "100%",
                   height: "42px",

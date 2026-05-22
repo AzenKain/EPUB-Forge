@@ -95,6 +95,21 @@ func (c *Controller) Epub(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(data))
+	case len(parts) == 2 && parts[1] == "gallery":
+		if r.Method == http.MethodGet {
+			resp, err := c.service.GetGallery(id)
+			utils.WriteJSON(w, resp, err)
+		} else if r.Method == http.MethodPost {
+			var req models.SaveGalleryRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				utils.WriteError(w, err)
+				return
+			}
+			analysis, err := c.service.SaveGallery(id, req)
+			utils.WriteJSON(w, analysis, err)
+		} else {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
 	case len(parts) == 2 && parts[1] == "assets":
 		data, contentType, err := c.service.Asset(id, r.URL.Query().Get("path"))
 		if err != nil {
@@ -194,6 +209,13 @@ func (c *Controller) Epub(w http.ResponseWriter, r *http.Request) {
 			req.NormalizeParagraphs = true
 		}
 		res, err := c.service.Optimize(id, req)
+		utils.WriteJSON(w, res, err)
+	case len(parts) == 2 && parts[1] == "repair":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		res, err := c.service.Repair(id)
 		utils.WriteJSON(w, res, err)
 	case len(parts) == 2 && parts[1] == "find":
 		if r.Method != http.MethodPost {
@@ -359,4 +381,62 @@ func (c *Controller) SearchMetadata(w http.ResponseWriter, r *http.Request) {
 	source := r.URL.Query().Get("source")
 	results, err := c.service.SearchMetadataOnline(query, source)
 	utils.WriteJSON(w, results, err)
+}
+
+func (c *Controller) CreateManga(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	err := r.ParseMultipartForm(300 << 20)
+	if err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	title := r.FormValue("title")
+	author := r.FormValue("author")
+	direction := r.FormValue("direction")
+
+	if title == "" {
+		http.Error(w, "Tiêu đề truyện tranh là bắt buộc", http.StatusBadRequest)
+		return
+	}
+
+	form := r.MultipartForm
+	files := form.File["images"]
+	if len(files) == 0 {
+		http.Error(w, "Vui lòng tải lên ít nhất một ảnh", http.StatusBadRequest)
+		return
+	}
+
+	var uploadedImages []models.UploadedMangaImage
+	for _, fh := range files {
+		f, err := fh.Open()
+		if err != nil {
+			utils.WriteError(w, err)
+			return
+		}
+		var buf bytes.Buffer
+		_, err = io.Copy(&buf, f)
+		f.Close()
+		if err != nil {
+			utils.WriteError(w, err)
+			return
+		}
+
+		uploadedImages = append(uploadedImages, models.UploadedMangaImage{
+			Filename: fh.Filename,
+			Data:     buf.Bytes(),
+		})
+	}
+
+	outputName, err := c.service.CreateManga(title, author, direction, uploadedImages)
+	if err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	utils.WriteJSON(w, map[string]any{"success": true, "fileName": outputName}, nil)
 }

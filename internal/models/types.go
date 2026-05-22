@@ -87,6 +87,10 @@ type ChapterEditRequest struct {
 	RemoveEmptyLines    bool     `json:"removeEmptyLines,omitempty"`
 	NormalizeParagraphs bool     `json:"normalizeParagraphs,omitempty"`
 	RegexFilters        []string `json:"regexFilters,omitempty"`
+	NormalizeTypography bool     `json:"normalizeTypography,omitempty"`
+	SmartQuotes         bool     `json:"smartQuotes,omitempty"`
+	NormalizeTones      bool     `json:"normalizeTones,omitempty"`
+	FixSpacing          bool     `json:"fixSpacing,omitempty"`
 }
 
 type MergeEpubsRequest struct {
@@ -120,6 +124,10 @@ type OptimizeRequest struct {
 	RemoveEmptyLines    bool     `json:"removeEmptyLines"`
 	NormalizeParagraphs bool     `json:"normalizeParagraphs"`
 	RegexFilters        []string `json:"regexFilters"`
+	NormalizeTypography bool     `json:"normalizeTypography"`
+	SmartQuotes         bool     `json:"smartQuotes"`
+	NormalizeTones      bool     `json:"normalizeTones"`
+	FixSpacing          bool     `json:"fixSpacing"`
 }
 
 type FindRequest struct {
@@ -164,3 +172,32 @@ type ReplaceResponse struct {
 	ReplacedCount int          `json:"replacedCount"`
 	Analysis      BookAnalysis `json:"analysis"`
 }
+
+type RepairResponse struct {
+	Success  bool         `json:"success"`
+	Logs     []string     `json:"logs"`
+	Analysis BookAnalysis `json:"analysis"`
+}
+
+type GalleryImage struct {
+	FullPath string `json:"fullPath"`
+	Href     string `json:"href"`
+	Caption  string `json:"caption"`
+	Selected bool   `json:"selected"`
+	Order    int    `json:"order"`
+}
+
+type SaveGalleryRequest struct {
+	Images []GalleryImage `json:"images"`
+}
+
+type GalleryResponse struct {
+	AvailableImages []GalleryImage `json:"availableImages"`
+	SelectedImages  []GalleryImage `json:"selectedImages"`
+}
+
+type UploadedMangaImage struct {
+	Filename string
+	Data     []byte
+}
+

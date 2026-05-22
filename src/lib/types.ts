@@ -76,3 +76,16 @@ export const emptyMetadata: BookMetadata = {
   seriesIndex: "",
   coverImage: ""
 };
+
+export type GalleryImage = {
+  fullPath: string;
+  href: string;
+  caption: string;
+  selected: boolean;
+  order: number;
+};
+
+export type GalleryResponse = {
+  availableImages: GalleryImage[];
+  selectedImages: GalleryImage[];
+};

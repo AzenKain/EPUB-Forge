@@ -201,8 +201,18 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 			ext := strings.ToLower(filepath.Ext(name))
 			if ext == ".xhtml" || ext == ".html" || ext == ".htm" || ext == ".css" || ext == ".ncx" {
 				txt := string(data)
-				if req.CleanHTML && (ext == ".xhtml" || ext == ".html" || ext == ".htm") {
-					txt = CleanHTMLContent(txt, req.StripInlineStyles, req.RemoveEmptyLines, req.NormalizeParagraphs, req.RegexFilters)
+				if (req.CleanHTML || req.NormalizeTypography) && (ext == ".xhtml" || ext == ".html" || ext == ".htm") {
+					txt = CleanHTMLContent(
+						txt,
+						req.CleanHTML && req.StripInlineStyles,
+						req.CleanHTML && req.RemoveEmptyLines,
+						req.CleanHTML && req.NormalizeParagraphs,
+						req.RegexFilters,
+						req.NormalizeTypography,
+						req.SmartQuotes,
+						req.NormalizeTones,
+						req.FixSpacing,
+					)
 				}
 				for _, repl := range basenameReplacements {
 					txt = strings.ReplaceAll(txt, repl.Old, repl.New)

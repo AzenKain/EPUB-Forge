@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Settings, Type, Sparkles, Search } from "lucide-react";
+import { Settings, Type, Sparkles, Search, Wrench, Image as ImageIcon } from "lucide-react";
 import { BookSidebar } from "./components/BookSidebar";
 import { ChaptersPanel } from "./components/ChaptersPanel";
 import { MetadataModal } from "./components/MetadataModal";
@@ -11,6 +11,9 @@ import { ImportTxtModal } from "./components/ImportTxtModal";
 import { EmbedFontModal } from "./components/EmbedFontModal";
 import { OptimizeModal } from "./components/OptimizeModal";
 import { FindReplaceModal } from "./components/FindReplaceModal";
+import { RepairModal } from "./components/RepairModal";
+import { GalleryModal } from "./components/GalleryModal";
+import { MangaModal } from "./components/MangaModal";
 import { api, normalizeAnalysis, readError } from "./lib/api";
 import { useAppStore } from "./lib/appStore";
 import { formatBytes } from "./lib/format";
@@ -68,6 +71,9 @@ function App() {
 
   const [optimizeOpen, setOptimizeOpen] = useState(false);
   const [findReplaceOpen, setFindReplaceOpen] = useState(false);
+  const [repairOpen, setRepairOpen] = useState(false);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [mangaOpen, setMangaOpen] = useState(false);
 
   useEffect(() => {
     refreshBooks();
@@ -423,6 +429,7 @@ function App() {
         onToggle={() => setSidebarCollapsed((current) => !current)}
         onMergeClick={() => setMergeOpen(true)}
         onImportTxtClick={() => setImportOpen(true)}
+        onMangaClick={() => setMangaOpen(true)}
         onUploadBooks={handleUploadBooks}
         onDeleteBook={handleDeleteBook}
         onDeleteBooks={handleDeleteBooks}
@@ -447,9 +454,17 @@ function App() {
                   <Type size={16} />
                   <span>Phông chữ</span>
                 </button>
+                <button className="smallButton metadataButton" onClick={() => setGalleryOpen(true)}>
+                  <ImageIcon size={16} />
+                  <span>Gallery</span>
+                </button>
                 <button className="smallButton metadataButton" onClick={() => setOptimizeOpen(true)}>
                   <Sparkles size={16} />
                   <span>Tối ưu</span>
+                </button>
+                <button className="smallButton metadataButton" onClick={() => setRepairOpen(true)}>
+                  <Wrench size={16} />
+                  <span>Sửa lỗi</span>
                 </button>
                 <button className="smallButton metadataButton" onClick={() => setFindReplaceOpen(true)}>
                   <Search size={16} />
@@ -608,6 +623,50 @@ function App() {
           onSetError={setError}
         />
       )}
+      {analysis && (
+        <RepairModal
+          open={repairOpen}
+          bookId={analysis.id}
+          bookTitle={metadata.title || analysis.title}
+          onClose={() => setRepairOpen(false)}
+          onSuccess={async (newAnalysis) => {
+            if (newAnalysis.id !== selectedId) {
+              setSelectedId(newAnalysis.id);
+            } else {
+              setAnalysis(newAnalysis);
+              setMetadata(newAnalysis.metadata || {});
+              setMetadataDirty(false);
+            }
+            await refreshBooks();
+            setPreviewRevision((prev) => prev + 1);
+          }}
+        />
+      )}
+      {analysis && (
+        <GalleryModal
+          open={galleryOpen}
+          bookId={analysis.id}
+          onClose={() => setGalleryOpen(false)}
+          onSaveSuccess={async (newAnalysis) => {
+            if (newAnalysis.id !== selectedId) {
+              setSelectedId(newAnalysis.id);
+            } else {
+              setAnalysis(newAnalysis);
+              setMetadata(newAnalysis.metadata || {});
+              setMetadataDirty(false);
+            }
+            await refreshBooks();
+            setPreviewRevision((prev) => prev + 1);
+          }}
+        />
+      )}
+      <MangaModal
+        open={mangaOpen}
+        onClose={() => setMangaOpen(false)}
+        onImportSuccess={handleImportSuccess}
+        onSetBusy={setBusy}
+        onSetError={setError}
+      />
     </main>
   );
 }

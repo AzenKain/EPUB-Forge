@@ -210,6 +210,11 @@ export function EditChapterModal({
   const [regexFilters, setRegexFilters] = useState("");
   const [cleanSuccess, setCleanSuccess] = useState("");
 
+  const [normalizeTypography, setNormalizeTypography] = useState(false);
+  const [smartQuotes, setSmartQuotes] = useState(true);
+  const [normalizeTones, setNormalizeTones] = useState(true);
+  const [fixSpacing, setFixSpacing] = useState(true);
+
   const handleCleanContent = async () => {
     let currentRaw = rawContent;
     if (activeTab === "visual" && visualEditorRef.current && parsedParts) {
@@ -237,7 +242,11 @@ export function EditChapterModal({
           stripInlineStyles: stripStyles,
           removeEmptyLines: removeEmpty,
           normalizeParagraphs: normalizeParas,
-          regexFilters: filterList
+          regexFilters: filterList,
+          normalizeTypography,
+          smartQuotes,
+          normalizeTones,
+          fixSpacing
         })
       });
 
@@ -1125,6 +1134,49 @@ export function EditChapterModal({
                       </div>
                     </div>
                   </label>
+
+                  <label className="clean-option">
+                    <input
+                      type="checkbox"
+                      checked={normalizeTypography}
+                      onChange={(e) => setNormalizeTypography(e.target.checked)}
+                    />
+                    <div>
+                      <strong>Chuẩn Hóa Typography Tiếng Việt</strong>
+                      <div style={{ fontSize: "11px", color: "#687168", marginTop: "2px" }}>
+                        Sử dụng dấu ngoặc cong, sửa vị trí dấu thanh và khoảng cách dấu câu.
+                      </div>
+                    </div>
+                  </label>
+
+                  {normalizeTypography && (
+                    <div style={{ paddingLeft: "24px", display: "flex", flexDirection: "column", gap: "8px", margin: "-6px 0 6px 0", background: "#f5f3eb", padding: "10px", borderRadius: "6px", border: "1px solid #e2dfd6" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", cursor: "pointer", color: "#373e3a" }}>
+                        <input
+                          type="checkbox"
+                          checked={smartQuotes}
+                          onChange={(e) => setSmartQuotes(e.target.checked)}
+                        />
+                        <span>Ngoặc kép thông minh (“...”)</span>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", cursor: "pointer", color: "#373e3a" }}>
+                        <input
+                          type="checkbox"
+                          checked={normalizeTones}
+                          onChange={(e) => setNormalizeTones(e.target.checked)}
+                        />
+                        <span>Chuẩn hóa dấu thanh kiểu mới</span>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", cursor: "pointer", color: "#373e3a" }}>
+                        <input
+                          type="checkbox"
+                          checked={fixSpacing}
+                          onChange={(e) => setFixSpacing(e.target.checked)}
+                        />
+                        <span>Sửa khoảng cách dấu câu</span>
+                      </label>
+                    </div>
+                  )}
 
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                     <span className="clean-regex-label">Regex lọc quảng cáo / rác:</span>

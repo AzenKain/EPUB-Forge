@@ -75,6 +75,17 @@ export function PreviewPanel({
         font-family: inherit;
         transition: background-color 0.2s, color 0.2s;
       }
+      body * {
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+      }
+      img, svg, image {
+        max-width: 100% !important;
+        height: auto !important;
+        object-fit: contain !important;
+        display: block !important;
+        margin: 8px auto !important;
+      }
       p {
         ${justifyStyle}
       }

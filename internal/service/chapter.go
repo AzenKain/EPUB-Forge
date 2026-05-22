@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"epubforge/internal/models"
 )
@@ -99,11 +100,21 @@ func (s *Service) CleanChapter(id string, req models.ChapterEditRequest) (string
 		}
 	}
 
-	cleaned := CleanHTMLContent(htmlContent, req.StripInlineStyles, req.RemoveEmptyLines, req.NormalizeParagraphs, req.RegexFilters)
+	cleaned := CleanHTMLContent(
+		htmlContent,
+		req.StripInlineStyles,
+		req.RemoveEmptyLines,
+		req.NormalizeParagraphs,
+		req.RegexFilters,
+		req.NormalizeTypography,
+		req.SmartQuotes,
+		req.NormalizeTones,
+		req.FixSpacing,
+	)
 	return cleaned, nil
 }
 
-func CleanHTMLContent(htmlContent string, stripInline bool, removeEmpty bool, normalizeParas bool, regexFilters []string) string {
+func CleanHTMLContent(htmlContent string, stripInline bool, removeEmpty bool, normalizeParas bool, regexFilters []string, normalizeTypography bool, smartQuotes bool, normalizeTones bool, fixSpacing bool) string {
 	bodyStartMatch := regexp.MustCompile(`(?i)<body[^>]*>`).FindStringIndex(htmlContent)
 	bodyEndMatch := regexp.MustCompile(`(?i)</body>`).FindStringIndex(htmlContent)
 
@@ -119,25 +130,18 @@ func CleanHTMLContent(htmlContent string, stripInline bool, removeEmpty bool, no
 	}
 
 	if stripInline {
-
 		body = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style>`).ReplaceAllString(body, "")
-
 		body = regexp.MustCompile(`(?is)\s+style\s*=\s*(?:"[^"]*"|'[^']*')`).ReplaceAllString(body, "")
-
 		body = regexp.MustCompile(`(?is)</?font\b[^>]*>`).ReplaceAllString(body, "")
-
 		body = regexp.MustCompile(`(?is)</?span\b[^>]*>`).ReplaceAllString(body, "")
 	}
 
 	if removeEmpty {
-
 		body = regexp.MustCompile(`(?is)<p\b[^>]*>\s*(?:&nbsp;|\s)*</p>`).ReplaceAllString(body, "")
 	}
 
 	if normalizeParas {
-
 		body = regexp.MustCompile(`(?is)<p\b[^>]*>\s*(?:&nbsp;|\s)+`).ReplaceAllString(body, "<p>")
-
 		body = regexp.MustCompile(`(?is)(?:<br\s*/?>\s*){2,}`).ReplaceAllString(body, "</p><p>")
 	}
 
@@ -153,7 +157,275 @@ func CleanHTMLContent(htmlContent string, stripInline bool, removeEmpty bool, no
 		}
 	}
 
+	if normalizeTypography && (smartQuotes || normalizeTones || fixSpacing) {
+		body = CleanHTMLContentTextNodes(body, smartQuotes, normalizeTones, fixSpacing)
+	}
+
 	return header + body + footer
+}
+
+type htmlSegment struct {
+	text       string
+	isTextNode bool
+}
+
+func CleanHTMLContentTextNodes(body string, smartQuotes bool, normalizeTones bool, fixSpacing bool) string {
+	segments := tokenizeHTML(body)
+	var result strings.Builder
+	for _, seg := range segments {
+		if seg.isTextNode {
+			t := seg.text
+			if smartQuotes {
+				t = applySmartQuotes(t)
+			}
+			if normalizeTones {
+				t = applyToneNormalization(t)
+			}
+			if fixSpacing {
+				t = applySpacingNormalization(t)
+			}
+			result.WriteString(t)
+		} else {
+			result.WriteString(seg.text)
+		}
+	}
+	return result.String()
+}
+
+func tokenizeHTML(htmlStr string) []htmlSegment {
+	var segments []htmlSegment
+	var current strings.Builder
+	inTag := false
+	activeBlockTag := ""
+
+	runes := []rune(htmlStr)
+	n := len(runes)
+	for i := 0; i < n; i++ {
+		r := runes[i]
+		if inTag {
+			current.WriteRune(r)
+			if r == '>' {
+				tagContent := current.String()
+				segments = append(segments, htmlSegment{text: tagContent, isTextNode: false})
+				current.Reset()
+				inTag = false
+
+				tagName := getTagName(tagContent)
+				if strings.HasPrefix(tagName, "/") {
+					closedTag := strings.TrimPrefix(tagName, "/")
+					if closedTag == activeBlockTag {
+						activeBlockTag = ""
+					}
+				} else if activeBlockTag == "" {
+					if tagName == "script" || tagName == "style" || tagName == "pre" || tagName == "code" {
+						activeBlockTag = tagName
+					}
+				}
+			}
+		} else {
+			if r == '<' {
+				if current.Len() > 0 {
+					segments = append(segments, htmlSegment{
+						text:       current.String(),
+						isTextNode: activeBlockTag == "",
+					})
+					current.Reset()
+				}
+				inTag = true
+				current.WriteRune(r)
+			} else {
+				current.WriteRune(r)
+			}
+		}
+	}
+	if current.Len() > 0 {
+		segments = append(segments, htmlSegment{
+			text:       current.String(),
+			isTextNode: activeBlockTag == "",
+		})
+	}
+	return segments
+}
+
+func getTagName(tagContent string) string {
+	content := strings.TrimSuffix(strings.TrimPrefix(tagContent, "<"), ">")
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	parts := strings.Fields(content)
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.ToLower(parts[0])
+}
+
+func applySmartQuotes(text string) string {
+	runes := []rune(text)
+	n := len(runes)
+	var result strings.Builder
+
+	isWhitespace := func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == 160
+	}
+
+	isPunctuation := func(r rune) bool {
+		return strings.ContainsRune(".,!?;:()[]{}<>-\"'/\\", r)
+	}
+
+	for i := 0; i < n; i++ {
+		r := runes[i]
+		if r == '"' {
+			prevIsSpace := i == 0 || isWhitespace(runes[i-1]) || runes[i-1] == '(' || runes[i-1] == '[' || runes[i-1] == '{'
+			nextIsSpace := i == n-1 || isWhitespace(runes[i+1]) || runes[i+1] == ')' || runes[i+1] == ']' || runes[i+1] == '}' || isPunctuation(runes[i+1])
+
+			if prevIsSpace && !nextIsSpace {
+				result.WriteRune('“')
+			} else if !prevIsSpace && nextIsSpace {
+				result.WriteRune('”')
+			} else if prevIsSpace && nextIsSpace {
+				result.WriteRune('“')
+			} else {
+				result.WriteRune('”')
+			}
+		} else if r == '\'' {
+			prevIsSpace := i == 0 || isWhitespace(runes[i-1]) || runes[i-1] == '(' || runes[i-1] == '[' || runes[i-1] == '{'
+			nextIsSpace := i == n-1 || isWhitespace(runes[i+1]) || runes[i+1] == ')' || runes[i+1] == ']' || runes[i+1] == '}' || isPunctuation(runes[i+1])
+
+			isApostrophe := false
+			if i > 0 && i < n-1 {
+				prevChar := runes[i-1]
+				nextChar := runes[i+1]
+				if unicode.IsLetter(prevChar) && unicode.IsLetter(nextChar) {
+					isApostrophe = true
+				}
+			}
+
+			if isApostrophe {
+				result.WriteRune('’')
+			} else if prevIsSpace && !nextIsSpace {
+				result.WriteRune('‘')
+			} else if !prevIsSpace && nextIsSpace {
+				result.WriteRune('’')
+			} else {
+				result.WriteRune('’')
+			}
+		} else {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
+}
+
+func applyToneNormalization(text string) string {
+	text = strings.ReplaceAll(text, "qu", "__qu_lc__")
+	text = strings.ReplaceAll(text, "Qu", "__qu_uc__")
+	text = strings.ReplaceAll(text, "QU", "__qu_uu__")
+	text = strings.ReplaceAll(text, "qU", "__qu_lu__")
+
+	replacements := []struct{ old, new string }{
+		{"oà", "òa"}, {"oá", "óa"}, {"oả", "ỏa"}, {"oã", "õa"}, {"oạ", "ọa"},
+		{"Oà", "Òa"}, {"Oá", "Óa"}, {"Oả", "Ỏa"}, {"Oã", "Õa"}, {"Oạ", "Ọa"},
+		{"oÀ", "òa"}, {"oÁ", "óa"}, {"oẢ", "ỏa"}, {"oÃ", "õa"}, {"oẠ", "ọa"},
+		{"OÀ", "ÒA"}, {"OÁ", "ÓA"}, {"OẢ", "ỎA"}, {"OÃ", "ÕA"}, {"OẠ", "ỌA"},
+
+		{"oè", "òe"}, {"oé", "óe"}, {"oẻ", "ỏe"}, {"oẽ", "õe"}, {"oẹ", "ọe"},
+		{"Oè", "Òe"}, {"Oé", "Óe"}, {"Oẻ", "Ỏe"}, {"Oẽ", "Õe"}, {"Oẹ", "Ọe"},
+		{"oÈ", "òe"}, {"oÉ", "óe"}, {"oẺ", "ỏe"}, {"oẼ", "õe"}, {"oẸ", "ọe"},
+		{"OÈ", "ÒE"}, {"OÉ", "ÓE"}, {"OẺ", "ỎE"}, {"OẼ", "ÕE"}, {"OẸ", "ỌE"},
+
+		{"uỳ", "ùy"}, {"uý", "úy"}, {"uỷ", "ủy"}, {"uỹ", "ũy"}, {"uỵ", "ụy"},
+		{"Uỳ", "Ùy"}, {"Uý", "Úy"}, {"Uỷ", "Ủy"}, {"Uỹ", "Ũy"}, {"Uỵ", "Ụy"},
+		{"uỲ", "ùy"}, {"uÝ", "úy"}, {"uỶ", "ủy"}, {"uỸ", "ũy"}, {"uỴ", "ụy"},
+		{"UÝ", "ÚY"}, {"UỶ", "ỦY"}, {"UỸ", "ŨY"}, {"UỴ", "ỤY"},
+	}
+
+	for _, r := range replacements {
+		text = strings.ReplaceAll(text, r.old, r.new)
+	}
+
+	text = strings.ReplaceAll(text, "__qu_lc__", "qu")
+	text = strings.ReplaceAll(text, "__qu_uc__", "Qu")
+	text = strings.ReplaceAll(text, "__qu_uu__", "QU")
+	text = strings.ReplaceAll(text, "__qu_lu__", "qU")
+
+	return text
+}
+
+func applySpacingNormalization(text string) string {
+	runes := []rune(text)
+	n := len(runes)
+	var result []rune
+
+	isSpace := func(r rune) bool {
+		return r == ' ' || r == '\t' || r == 160
+	}
+
+	isPunct := func(r rune) bool {
+		return r == '.' || r == ',' || r == ';' || r == ':' || r == '!' || r == '?'
+	}
+
+	for i := 0; i < n; i++ {
+		r := runes[i]
+
+		if isSpace(r) {
+			nextIdx := i
+			for nextIdx < n && isSpace(runes[nextIdx]) {
+				nextIdx++
+			}
+			if nextIdx < n && isPunct(runes[nextIdx]) {
+				continue
+			}
+
+			result = append(result, ' ')
+			for i+1 < n && isSpace(runes[i+1]) {
+				i++
+			}
+			continue
+		}
+
+		result = append(result, r)
+
+		if isPunct(r) {
+			isEllipsis := false
+			if r == '.' {
+				dotCount := 1
+				idxBefore := len(result) - 2
+				for idxBefore >= 0 && result[idxBefore] == '.' {
+					dotCount++
+					idxBefore--
+				}
+				idxAfter := i + 1
+				for idxAfter < n && runes[idxAfter] == '.' {
+					dotCount++
+					idxAfter++
+				}
+				if dotCount >= 3 {
+					isEllipsis = true
+				}
+			}
+
+			if isEllipsis {
+				continue
+			}
+
+			if i+1 < n {
+				nextRune := runes[i+1]
+				if isSpace(nextRune) {
+					continue
+				}
+				if unicode.IsDigit(nextRune) {
+					continue
+				}
+				if strings.ContainsRune(".,!?;:()[]{}<>\"'“”‘’)»]", nextRune) {
+					continue
+				}
+				result = append(result, ' ')
+			}
+		}
+	}
+
+	return string(result)
 }
 
 func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, newTitle string, content string, mergeIndices []int) (string, error) {

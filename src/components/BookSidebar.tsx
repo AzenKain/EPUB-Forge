@@ -13,6 +13,7 @@ type Props = {
   onToggle: () => void;
   onMergeClick: () => void;
   onImportTxtClick: () => void;
+  onMangaClick: () => void;
   onUploadBooks: (files: File[]) => void;
   onDeleteBook: (id: string, name: string) => void;
   onDeleteBooks: (ids: string[]) => void;
@@ -28,6 +29,7 @@ export function BookSidebar({
   onToggle,
   onMergeClick,
   onImportTxtClick,
+  onMangaClick,
   onUploadBooks,
   onDeleteBook,
   onDeleteBooks
@@ -118,6 +120,24 @@ export function BookSidebar({
             <span>Nhập TXT</span>
           </button>
         </div>
+        <button 
+          className="toolButton" 
+          onClick={onMangaClick} 
+          disabled={busy} 
+          title="Tạo Manga EPUB từ nhiều ảnh" 
+          style={{ 
+            width: "100%", 
+            background: "#eae3d2", 
+            color: "#1f624d", 
+            borderColor: "#c9c0ac",
+            justifyContent: "center",
+            fontWeight: "600",
+            gap: "6px"
+          }}
+        >
+          <BookOpen size={18} />
+          <span>Tạo Manga EPUB</span>
+        </button>
       </div>
 
       {!collapsed && (
