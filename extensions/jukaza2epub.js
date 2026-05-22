@@ -204,7 +204,8 @@ function run(params) {
     let fullUrl = rawHref.startsWith("http") ? rawHref : baseUrl + rawHref;
     
     let title = match[2].replace(/<[^>]+>/g, "").trim();
-    title = title.replace(/[\r\n\t]+/g, " ").trim();
+    title = title.replace(/&nbsp;/g, " ");
+    title = title.replace(/\s+/g, " ").trim();
     
     const lowerTitle = title.toLowerCase();
     if (lowerTitle.indexOf("đọc từ đầu") !== -1 || lowerTitle.indexOf("đọc tiếp") !== -1) {

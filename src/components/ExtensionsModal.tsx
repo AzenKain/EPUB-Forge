@@ -28,7 +28,6 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch extensions list when modal opens
   useEffect(() => {
     if (open) {
       setLoading(true);
@@ -70,7 +69,6 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
     };
   }, [open]);
 
-  // Scroll to bottom of logs console
   useEffect(() => {
     if (consoleBottomRef.current) {
       consoleBottomRef.current.scrollIntoView({ behavior: "smooth" });
@@ -85,7 +83,6 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
     setSuccess("");
     setLogs([]);
     
-    // Set default values from schema
     const initialData: Record<string, any> = {};
     if (ext.inputs) {
       ext.inputs.forEach((input) => {
@@ -326,7 +323,7 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
-        buffer = lines.pop() || ""; // Keep incomplete line
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
           if (!line.trim()) continue;
@@ -360,7 +357,6 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
               abortControllerRef.current = null;
             }
           } catch (e) {
-            // Ignore parse errors on raw lines
           }
         }
       }

@@ -25,6 +25,10 @@ func New(svc *service.Service, frontend fs.FS) *http.ServeMux {
 	mux.HandleFunc("/api/extensions/interact", ctrl.InteractExtension)
 	mux.HandleFunc("/api/epubs/", ctrl.Epub)
 	mux.HandleFunc("/api/files/", ctrl.File)
+	mux.HandleFunc("/api/update/check", ctrl.CheckUpdate)
+	mux.HandleFunc("/api/update/run", ctrl.RunUpdate)
+	mux.HandleFunc("/api/update/progress", ctrl.GetUpdateProgress)
+	mux.HandleFunc("/api/update/restart", ctrl.RestartApp)
 	mux.HandleFunc("/", ctrl.Frontend)
 	return mux
 }

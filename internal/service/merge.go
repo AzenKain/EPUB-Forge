@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, error) {
@@ -136,6 +137,11 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 			for k, v := range item.Attrs {
 				newAttrs[k] = v
 			}
+			if props := removePropertyToken(newAttrs["properties"], "nav"); props != "" {
+				newAttrs["properties"] = props
+			} else {
+				delete(newAttrs, "properties")
+			}
 			if bookIdx == 0 && coverID != "" && item.ID == coverID {
 				mergedCoverID = newID
 				newAttrs["properties"] = addPropertyToken(newAttrs["properties"], "cover-image")
@@ -219,6 +225,7 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 
 	var manifestBuilder strings.Builder
 
+	manifestBuilder.WriteString(`    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />` + "\n")
 	manifestBuilder.WriteString(`    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml" />` + "\n")
 	for _, rec := range masterManifest {
 		propAttr := ""
@@ -236,13 +243,14 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 	}
 
 	opfXML := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="pub-id" version="2.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="pub-id" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:title>%s</dc:title>
     <dc:creator>%s</dc:creator>
     <dc:language>%s</dc:language>
     <dc:identifier id="pub-id">%s</dc:identifier>
 %s
+    <meta property="dcterms:modified">%s</meta>
   </metadata>
   <manifest>
 %s  </manifest>
@@ -254,6 +262,7 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 		escapeXML(langStr),
 		"uuid-"+randomID(),
 		coverMetaTag(mergedCoverID),
+		time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 		manifestBuilder.String(),
 		spineBuilder.String(),
 	)
@@ -308,6 +317,18 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 		return "", err
 	}
 	if _, err := nw.Write([]byte(ncxBuilder.String())); err != nil {
+		return "", err
+	}
+
+	tocItems := make([]createSpineItem, 0, len(masterTOC))
+	for i, pt := range masterTOC {
+		tocItems = append(tocItems, createSpineItem{
+			ID:    fmt.Sprintf("nav_%d", i+1),
+			Href:  pt.Src,
+			Title: pt.Title,
+		})
+	}
+	if err := writeZipText(zw, "nav.xhtml", createNavXMLAt("nav.xhtml", tocItems)); err != nil {
 		return "", err
 	}
 

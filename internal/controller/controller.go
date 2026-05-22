@@ -14,6 +14,7 @@ import (
 	"epubforge/internal/models"
 	"epubforge/internal/service"
 	"epubforge/internal/utils"
+	"time"
 )
 
 type Controller struct {
@@ -215,7 +216,21 @@ func (c *Controller) Epub(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		res, err := c.service.Repair(id)
+		var req models.RepairRequest
+		if r.ContentLength > 0 {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				utils.WriteError(w, err)
+				return
+			}
+		}
+		res, err := c.service.Repair(id, req.Fixes)
+		utils.WriteJSON(w, res, err)
+	case len(parts) == 2 && parts[1] == "validate":
+		if r.Method != http.MethodPost && r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		res, err := c.service.Validate(id)
 		utils.WriteJSON(w, res, err)
 	case len(parts) == 2 && parts[1] == "find":
 		if r.Method != http.MethodPost {
@@ -582,7 +597,7 @@ func (c *Controller) UploadExtension(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := r.ParseMultipartForm(5 << 20) // 5MB max
+	err := r.ParseMultipartForm(5 << 20)
 	if err != nil {
 		utils.WriteError(w, err)
 		return
@@ -672,3 +687,46 @@ func (c *Controller) InteractExtension(w http.ResponseWriter, r *http.Request) {
 	}, nil)
 }
 
+func (c *Controller) CheckUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	res, err := c.service.CheckUpdate(r.Context())
+	utils.WriteJSON(w, res, err)
+}
+
+func (c *Controller) RunUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	err := c.service.RunUpdate()
+	if err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+	utils.WriteJSON(w, map[string]any{"success": true}, nil)
+}
+
+func (c *Controller) GetUpdateProgress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	res := c.service.GetUpdateProgress()
+	utils.WriteJSON(w, res, nil)
+}
+
+func (c *Controller) RestartApp(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	utils.WriteJSON(w, map[string]any{"success": true}, nil)
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		c.service.RestartApp()
+	}()
+}

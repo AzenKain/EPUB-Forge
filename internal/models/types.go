@@ -193,9 +193,31 @@ type ReplaceResponse struct {
 }
 
 type RepairResponse struct {
-	Success  bool         `json:"success"`
-	Logs     []string     `json:"logs"`
-	Analysis BookAnalysis `json:"analysis"`
+	Success  bool             `json:"success"`
+	Logs     []string         `json:"logs"`
+	Analysis BookAnalysis     `json:"analysis"`
+	Report   ValidationReport `json:"report,omitempty"`
+}
+
+type RepairRequest struct {
+	Fixes []string `json:"fixes"`
+}
+
+type ValidationIssue struct {
+	Severity string `json:"severity"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+	File     string `json:"file,omitempty"`
+	Fixable  bool   `json:"fixable"`
+	FixID    string `json:"fixId,omitempty"`
+}
+
+type ValidationReport struct {
+	Valid    bool              `json:"valid"`
+	Errors   int               `json:"errors"`
+	Warnings int               `json:"warnings"`
+	Infos    int               `json:"infos"`
+	Issues   []ValidationIssue `json:"issues"`
 }
 
 type GalleryImage struct {
@@ -218,4 +240,19 @@ type GalleryResponse struct {
 type UploadedMangaImage struct {
 	Filename string
 	Data     []byte
+}
+
+type UpdateCheckResponse struct {
+	CurrentVersion  string `json:"currentVersion"`
+	LatestVersion   string `json:"latestVersion"`
+	UpdateAvailable bool   `json:"updateAvailable"`
+	ReleaseNotes    string `json:"releaseNotes"`
+	AssetName       string `json:"assetName"`
+	AssetSize       int64  `json:"assetSize"`
+}
+
+type UpdateProgressResponse struct {
+	Status  string `json:"status"`
+	Percent int    `json:"percent"`
+	Error   string `json:"error"`
 }

@@ -75,7 +75,6 @@ func (s *Service) getBrowser() (*rod.Browser, error) {
 	return s.browser, nil
 }
 
-// Close gracefully shuts down the browser and launcher.
 func (s *Service) Close() {
 	s.activeRunsMu.Lock()
 	defer s.activeRunsMu.Unlock()
@@ -176,15 +175,12 @@ func (s *JSSession) HasCookie(cookieName string) bool {
 }
 
 func (s *JSSession) GetBinaryBase64(urlStr string, headers map[string]string) (string, error) {
-	// Use Go's native HTTP client to bypass CORS restrictions.
-	// Extract cookies from the browser session for authentication.
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
 		return "", fmt.Errorf("lỗi tạo request tải ảnh: %w", err)
 	}
 
-	// Set headers from caller
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -192,13 +188,11 @@ func (s *JSSession) GetBinaryBase64(urlStr string, headers map[string]string) (s
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	}
 
-	// Copy browser cookies for the target domain
 	parsedURL, _ := url.Parse(urlStr)
 	if parsedURL != nil {
 		cookies, cerr := s.page.Cookies(nil)
 		if cerr == nil {
 			for _, c := range cookies {
-				// Include cookies that match the target domain
 				if strings.Contains(parsedURL.Host, c.Domain) || strings.Contains(c.Domain, strings.TrimPrefix(parsedURL.Hostname(), "www.")) {
 					req.AddCookie(&http.Cookie{Name: c.Name, Value: c.Value})
 				}
@@ -379,7 +373,6 @@ func (s *Service) extensionsDir() string {
 	return dir
 }
 
-// ListExtensions scans extensions/ directory for JS files and extracts metadata
 func (s *Service) ListExtensions() ([]ExtensionInfo, error) {
 	dir := s.extensionsDir()
 	entries, err := os.ReadDir(dir)
@@ -401,7 +394,6 @@ func (s *Service) ListExtensions() ([]ExtensionInfo, error) {
 
 		info, err := s.parseExtensionMeta(string(jsBytes))
 		if err != nil {
-			// Skip extension if metadata is invalid or missing register()
 			continue
 		}
 		list = append(list, info)
@@ -440,7 +432,6 @@ func (s *Service) parseExtensionMeta(jsCode string) (ExtensionInfo, error) {
 	return info, nil
 }
 
-// RunExtension executes the run(params) function on the selected extension JS file
 func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string]any, logWriter io.Writer) ([]string, error) {
 	dir := s.extensionsDir()
 	filePath := filepath.Join(dir, id+".js")
@@ -472,7 +463,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 		}
 	}()
 
-	// Send start message with runId
 	startMsg := map[string]any{
 		"type":  "start",
 		"runId": runID,
@@ -483,7 +473,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 	fmt.Fprintf(logWriter, "[*] Khởi tạo sandbox Extension Runner...\n")
 	vm := goja.New()
 
-	// Inject console.log to logWriter
 	vm.Set("console", map[string]any{
 		"log": func(args ...any) {
 			parts := make([]string, len(args))
@@ -495,7 +484,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 		},
 	})
 
-	// Inject HTTP Session bindings
 	vm.Set("http", map[string]any{
 		"newSession": func() *JSSession {
 			sess, err := s.NewJSSession(logWriter, runID)
@@ -506,7 +494,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 		},
 	})
 
-	// Inject Utils
 	vm.Set("utils", map[string]any{
 		"sleep": func(ms int64) {
 			time.Sleep(time.Duration(ms) * time.Millisecond)
@@ -525,7 +512,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 		},
 	})
 
-	// Run script to define functions
 	_, err = vm.RunString(string(jsBytes))
 	if err != nil {
 		return nil, fmt.Errorf("lỗi khởi tạo script: %w", err)
@@ -539,7 +525,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 
 	fmt.Fprintf(logWriter, "[*] Đang thực thi mã nguồn Extension...\n")
 
-	// Set up cancellation monitoring
 	doneChan := make(chan struct{})
 	defer close(doneChan)
 
@@ -551,7 +536,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 		}
 	}()
 
-	// Execute run function in a safe block
 	var result any
 	errChan := make(chan error, 1)
 	go func() {
@@ -590,7 +574,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 	var ebooks []map[string]any
 
 	if mapRes, ok := result.(map[string]any); ok {
-		// Check if it contains a list of ebooks under "ebooks" key
 		if ebooksVal, ok := mapRes["ebooks"]; ok {
 			if sliceVal, ok := ebooksVal.([]any); ok {
 				for _, item := range sliceVal {
@@ -602,7 +585,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 				ebooks = append(ebooks, sliceVal...)
 			}
 		}
-		// If no "ebooks" key is found, treat the whole map as a single ebook
 		if len(ebooks) == 0 {
 			ebooks = append(ebooks, mapRes)
 		}
@@ -632,7 +614,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 			return nil, fmt.Errorf("dữ liệu trả về không khớp cấu trúc EPUB: %w", err)
 		}
 
-		// Map images from this ebook to assets map in request
 		assetsMap := make(map[string]string)
 		if jsImages, ok := m["images"].(map[string]any); ok {
 			for k, v := range jsImages {
@@ -643,7 +624,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 		}
 		req.Assets = assetsMap
 
-		// Create EPUB using the existing engine
 		outputName, err := s.CreateEpub(req, nil)
 		if err != nil {
 			return nil, fmt.Errorf("lỗi biên dịch EPUB: %w", err)
@@ -656,7 +636,6 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 	return createdBooks, nil
 }
 
-// AddExtension parses the JS extension code, validates it, and saves it.
 func (s *Service) AddExtension(jsCode []byte) (ExtensionInfo, error) {
 	info, err := s.parseExtensionMeta(string(jsCode))
 	if err != nil {
@@ -672,7 +651,6 @@ func (s *Service) AddExtension(jsCode []byte) (ExtensionInfo, error) {
 	return info, nil
 }
 
-// DeleteExtension removes the extension JS file by ID.
 func (s *Service) DeleteExtension(id string) error {
 	dir := s.extensionsDir()
 	filePath := filepath.Join(dir, id+".js")
@@ -682,7 +660,6 @@ func (s *Service) DeleteExtension(id string) error {
 	return os.Remove(filePath)
 }
 
-// InteractExtension performs click/type events on the active browser page of a session
 func (s *Service) InteractExtension(runID string, action string, x, y float64, text string) (string, error) {
 	s.activeRunsMu.RLock()
 	run, ok := s.activeRuns[runID]
@@ -718,10 +695,8 @@ func (s *Service) InteractExtension(runID string, action string, x, y float64, t
 		return "", fmt.Errorf("hành động không được hỗ trợ: %s", action)
 	}
 
-	// Wait DOM stable briefly after interaction
 	_ = run.Page.WaitDOMStable(500*time.Millisecond, 0.5)
 
-	// Take a new screenshot immediately and return it as base64 JPEG
 	quality := int(75)
 	imgBytes, err := run.Page.Screenshot(true, &proto.PageCaptureScreenshot{
 		Format:  proto.PageCaptureScreenshotFormatJpeg,

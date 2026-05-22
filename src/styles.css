@@ -245,21 +245,22 @@ button {
 }
 
 .topbar {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(420px, 720px);
+  gap: 18px;
+  align-items: start;
   margin-bottom: 14px;
   min-width: 0;
 }
 
 .topbarInfo {
   min-width: 0;
-  flex: 1 1 auto;
+  max-width: 760px;
 }
 
 .topbar h2 {
-  font-size: 22px;
+  font-size: 21px;
+  line-height: 1.18;
   word-break: break-word;
   overflow-wrap: break-word;
 }
@@ -267,8 +268,11 @@ button {
 .topbarActions {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex: 0 0 auto;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 720px;
 }
 
 .status,
@@ -280,9 +284,14 @@ button {
 .status {
   border: 1px solid #d8d5cc;
   background: #fffdf8;
-  padding: 7px 12px;
+  padding: 6px 12px;
   color: #4d574f;
   font-size: 13px;
+}
+
+.metadataButton {
+  min-height: 40px;
+  padding-inline: 13px;
 }
 
 .metadataButton.dirty {
@@ -830,11 +839,21 @@ button:disabled {
 
   .topbar {
     align-items: flex-start;
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
   .topbar h2 {
     white-space: normal;
+  }
+
+  .topbarInfo {
+    max-width: none;
+  }
+
+  .topbarActions {
+    justify-content: flex-start;
+    max-width: none;
+    width: 100%;
   }
 }
 

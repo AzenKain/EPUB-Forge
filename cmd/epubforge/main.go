@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -18,15 +19,44 @@ import (
 //go:embed all:dist
 var embeddedDist embed.FS
 
+var Version = "1.6.0"
+
 func main() {
 	workspace, err := os.Getwd()
 	if err != nil {
 		log.Fatal(err)
 	}
-	svc, err := service.New(workspace)
+	svc, err := service.New(workspace, Version)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// Clean up any left-over .old files from a previous self-update
+	go func() {
+		time.Sleep(2 * time.Second)
+		self, err := os.Executable()
+		if err == nil {
+			oldFile := filepath.Join(filepath.Dir(self), "."+filepath.Base(self)+".old")
+			if _, err := os.Stat(oldFile); err == nil {
+				_ = os.Remove(oldFile)
+			}
+		}
+	}()
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		log.Printf("[SelfUpdate] Đang kiểm tra bản cập nhật (phiên bản hiện tại: %s)...", Version)
+		res, err := svc.CheckUpdate(context.Background())
+		if err != nil {
+			log.Printf("[SelfUpdate] Lỗi khi kiểm tra cập nhật: %v", err)
+			return
+		}
+		if res.UpdateAvailable {
+			log.Printf("[SelfUpdate] Đã tìm thấy bản cập nhật mới: %s!", res.LatestVersion)
+		} else {
+			log.Printf("[SelfUpdate] EPUBForge đã ở phiên bản mới nhất (%s).", Version)
+		}
+	}()
 
 	port := utils.Env("PORT", "5180")
 	addr := "127.0.0.1:" + port

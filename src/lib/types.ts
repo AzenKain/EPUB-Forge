@@ -90,6 +90,23 @@ export type GalleryResponse = {
   selectedImages: GalleryImage[];
 };
 
+export type ValidationIssue = {
+  severity: "error" | "warning" | "info";
+  code: string;
+  message: string;
+  file?: string;
+  fixable: boolean;
+  fixId?: string;
+};
+
+export type ValidationReport = {
+  valid: boolean;
+  errors: number;
+  warnings: number;
+  infos: number;
+  issues: ValidationIssue[];
+};
+
 export type ExtensionInput = {
   id: string;
   type: "text" | "number" | "boolean" | "password";
@@ -105,3 +122,19 @@ export type ExtensionInfo = {
   description: string;
   inputs: ExtensionInput[];
 };
+
+export type UpdateCheckResponse = {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  releaseNotes: string;
+  assetName: string;
+  assetSize: number;
+};
+
+export type UpdateProgressResponse = {
+  status: "idle" | "downloading" | "applying" | "completed" | "error";
+  percent: number;
+  error: string;
+};
+

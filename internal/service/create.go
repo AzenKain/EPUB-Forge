@@ -111,10 +111,11 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 		{ID: "style", Href: "Styles/style.css", MediaType: "text/css"},
 	}
 
-	// Write extra assets if provided (e.g., custom images or styling from extensions)
-	for path, base64Data := range req.Assets {
-		cleanPath := strings.ReplaceAll(path, "\\", "/")
-		cleanPath = strings.TrimPrefix(cleanPath, "/")
+	for assetPath, base64Data := range req.Assets {
+		cleanPath, ok := cleanEPUBAssetPath(assetPath)
+		if !ok {
+			continue
+		}
 
 		var dataBytes []byte
 		var err error
@@ -124,7 +125,7 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 			dataBytes, err = base64.StdEncoding.DecodeString(base64Data)
 		}
 		if err != nil {
-			continue // skip invalid assets
+			continue
 		}
 
 		if err := writeZipBytes(zw, "OEBPS/"+cleanPath, dataBytes); err != nil {
@@ -132,9 +133,9 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 		}
 
 		mime := contentTypeFor(cleanPath)
-		cleanID := strings.NewReplacer("/", "_", ".", "_", "-", "_", " ", "_").Replace(cleanPath)
+		cleanID := sanitizeManifestID("asset_" + cleanPath)
 		manifest = append(manifest, createManifestItem{
-			ID:        "asset_" + cleanID,
+			ID:        cleanID,
 			Href:      cleanPath,
 			MediaType: mime,
 		})
@@ -145,8 +146,8 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 	}
 	var spine []createSpineItem
 	var toc []createSpineItem
+	fixedLayout := false
 
-	// 1. Cover Page
 	if coverItem.ID != "" {
 		coverPageHref := "Text/titlepage.xhtml"
 		coverPageID := "titlepage"
@@ -177,13 +178,11 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 		toc = append(toc, createSpineItem{ID: coverPageID, Href: coverPageHref, Title: "Cover"})
 	}
 
-	// 2. Visible TOC Page (index.html) placeholder in spine and toc
 	tocPageHref := "Text/index.html"
 	tocPageID := "index_html"
 	spine = append(spine, createSpineItem{ID: tocPageID, Href: tocPageHref, Title: title})
 	toc = append(toc, createSpineItem{ID: tocPageID, Href: tocPageHref, Title: title})
 
-	// 3. Chapters
 	var chapterSpineItems []createSpineItem
 	var actualChaptersToc []createSpineItem
 
@@ -195,6 +194,7 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 
 		mode := strings.ToLower(strings.TrimSpace(chapter.Mode))
 		if mode == "manga" {
+			fixedLayout = true
 			pages, items, err := writeMangaChapter(zw, idx, chapterTitle, mangaImages[chapter.ID])
 			if err != nil {
 				return "", err
@@ -226,15 +226,14 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 	spine = append(spine, chapterSpineItems...)
 	toc = append(toc, actualChaptersToc...)
 
-	// Now write OEBPS/Text/index.html using actualChaptersToc
 	var tocListBuilder strings.Builder
 	currentDateStr := time.Now().Format("02/01/2006")
 	for _, item := range actualChaptersToc {
-		relHref := "../" + item.Href
+		relHref := relativeManifestHref(tocPageHref, item.Href)
 		tocListBuilder.WriteString(fmt.Sprintf(`    <li>
       <a href="%s">%s</a>
       <div class="date">%s</div>
-    </li>`+"\n", relHref, escapeXML(item.Title), currentDateStr))
+    </li>`+"\n", escapeXML(relHref), escapeXML(item.Title), currentDateStr))
 	}
 
 	visibleTOCPageHTML := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
@@ -296,19 +295,25 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 	}
 
 	uuidID := "uuid-" + randomID()
-	if err := writeZipText(zw, "OEBPS/content.opf", createOPFXML(metadata, uuidID, direction, manifest, spine, coverItem.ID != "")); err != nil {
+	if err := writeZipText(zw, "OEBPS/content.opf", createOPFXML(metadata, uuidID, direction, manifest, spine, coverItem.ID != "", fixedLayout)); err != nil {
 		return "", err
 	}
 	if err := writeZipText(zw, "OEBPS/toc.ncx", createNCXXML(title, uuidID, toc)); err != nil {
 		return "", err
 	}
-	if err := writeZipText(zw, "OEBPS/Text/nav.xhtml", createNavXML(toc)); err != nil {
+	if err := writeZipText(zw, "OEBPS/Text/nav.xhtml", createNavXMLAt("Text/nav.xhtml", toc)); err != nil {
 		return "", err
 	}
 
 	if err := zw.Close(); err != nil {
 		return "", fmt.Errorf("lỗi đóng file zip: %w", err)
 	}
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("lỗi đóng file: %w", err)
+	}
+
+	id := toID(outputName)
+	_, _ = s.Repair(id, []string{"FIX_XHTML", "CLEAN_BROKEN_CONTENT_LINKS"})
 
 	return outputName, nil
 }
@@ -359,6 +364,39 @@ func writeZipBytes(zw *zip.Writer, name string, data []byte) error {
 	}
 	_, err = w.Write(data)
 	return err
+}
+
+func cleanEPUBAssetPath(input string) (string, bool) {
+	clean := strings.TrimSpace(strings.ReplaceAll(input, "\\", "/"))
+	clean = strings.TrimPrefix(clean, "/")
+	clean = path.Clean(clean)
+	if clean == "." || clean == "" || strings.HasPrefix(clean, "../") || clean == ".." {
+		return "", false
+	}
+	return clean, true
+}
+
+func sanitizeManifestID(input string) string {
+	replacer := strings.NewReplacer("/", "_", ".", "_", "-", "_", " ", "_")
+	clean := replacer.Replace(input)
+	clean = regexp.MustCompile(`[^A-Za-z0-9_:.]`).ReplaceAllString(clean, "_")
+	clean = strings.Trim(clean, "_")
+	if clean == "" {
+		clean = "item"
+	}
+	if first := clean[0]; (first < 'A' || first > 'Z') && (first < 'a' || first > 'z') && first != '_' {
+		clean = "item_" + clean
+	}
+	return clean
+}
+
+func relativeManifestHref(fromHref, toHref string) string {
+	fromPath := path.Clean(strings.TrimPrefix(strings.ReplaceAll(fromHref, "\\", "/"), "/"))
+	toPath := path.Clean(strings.TrimPrefix(strings.ReplaceAll(toHref, "\\", "/"), "/"))
+	if fromPath == "." || toPath == "." {
+		return toHref
+	}
+	return relativeZipPath(fromPath, toPath)
 }
 
 func createNormalChapterHTML(title, content string, rawHTML bool, assets map[string]string) string {
@@ -535,7 +573,7 @@ func imageMediaType(ext string) string {
 	}
 }
 
-func createOPFXML(metadata models.BookMetadata, uuidID, direction string, manifest []createManifestItem, spine []createSpineItem, hasCover bool) string {
+func createOPFXML(metadata models.BookMetadata, uuidID, direction string, manifest []createManifestItem, spine []createSpineItem, hasCover bool, fixedLayout bool) string {
 	var manifestBuilder strings.Builder
 	for _, item := range manifest {
 		props := ""
@@ -544,12 +582,13 @@ func createOPFXML(metadata models.BookMetadata, uuidID, direction string, manife
 		} else if item.ID == "cover-image" {
 			props = ` properties="cover-image"`
 		}
-		manifestBuilder.WriteString(fmt.Sprintf(`    <item id="%s" href="%s" media-type="%s"%s />`+"\n", item.ID, item.Href, item.MediaType, props))
+		manifestBuilder.WriteString(fmt.Sprintf(`    <item id="%s" href="%s" media-type="%s"%s />`+"\n",
+			escapeXML(item.ID), escapeXML(item.Href), escapeXML(item.MediaType), props))
 	}
 
 	var spineBuilder strings.Builder
 	for _, item := range spine {
-		spineBuilder.WriteString(fmt.Sprintf(`    <itemref idref="%s" />`+"\n", item.ID))
+		spineBuilder.WriteString(fmt.Sprintf(`    <itemref idref="%s" />`+"\n", escapeXML(item.ID)))
 	}
 
 	var extraMetadata strings.Builder
@@ -575,6 +614,11 @@ func createOPFXML(metadata models.BookMetadata, uuidID, direction string, manife
 	}
 	if hasCover {
 		extraMetadata.WriteString("    <meta name=\"cover\" content=\"cover-image\" />\n")
+	}
+	if fixedLayout {
+		extraMetadata.WriteString("    <meta property=\"rendition:layout\">pre-paginated</meta>\n")
+		extraMetadata.WriteString("    <meta property=\"rendition:orientation\">auto</meta>\n")
+		extraMetadata.WriteString("    <meta property=\"rendition:spread\">auto</meta>\n")
 	}
 
 	return fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
@@ -616,10 +660,11 @@ func createNCXXML(title, uuidID string, items []createSpineItem) string {
 </ncx>`, uuidID, escapeXML(title), points.String())
 }
 
-func createNavXML(items []createSpineItem) string {
+func createNavXMLAt(navHref string, items []createSpineItem) string {
 	var links strings.Builder
 	for _, item := range items {
-		links.WriteString(fmt.Sprintf(`      <li><a href="%s">%s</a></li>`+"\n", item.Href, escapeXML(item.Title)))
+		relHref := relativeManifestHref(navHref, item.Href)
+		links.WriteString(fmt.Sprintf(`      <li><a href="%s">%s</a></li>`+"\n", escapeXML(relHref), escapeXML(item.Title)))
 	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>

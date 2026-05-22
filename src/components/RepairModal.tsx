@@ -1,5 +1,6 @@
-import React, { useState } from "react";
-import { X, Sparkles, AlertTriangle, CheckCircle, Wrench, Play } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, CheckCircle, FileWarning, RefreshCw, ShieldCheck, Wrench, X } from "lucide-react";
+import type { ValidationReport } from "../lib/types";
 
 type Props = {
   open: boolean;
@@ -13,42 +14,95 @@ type RepairResult = {
   success: boolean;
   logs: string[];
   analysis: any;
+  report?: ValidationReport;
+};
+
+const severityColor = {
+  error: "#9b1c1c",
+  warning: "#9a5b00",
+  info: "#35658f"
 };
 
 export function RepairModal({ open, bookId, bookTitle, onClose, onSuccess }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [report, setReport] = useState<ValidationReport | null>(null);
+  const [selectedFixes, setSelectedFixes] = useState<string[]>([]);
   const [result, setResult] = useState<RepairResult | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setError("");
+    setReport(null);
+    setSelectedFixes([]);
+    setResult(null);
+    void handleValidate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, bookId]);
+
+  const fixableIssues = useMemo(() => report?.issues.filter((issue) => issue.fixable && issue.fixId) || [], [report]);
+  const selectedSet = useMemo(() => new Set(selectedFixes), [selectedFixes]);
 
   if (!open) return null;
 
-  const handleRepair = async () => {
+  async function handleValidate() {
     setLoading(true);
     setError("");
-    setResult(null);
-
     try {
-      const res = await fetch(`/api/epubs/${encodeURIComponent(bookId)}/repair`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+      const res = await fetch(`/api/epubs/${encodeURIComponent(bookId)}/validate`, { method: "POST" });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || "Lỗi khi tự động sửa sách");
+        throw new Error(errData.error || "Không thể kiểm tra EPUB");
       }
-      const data = await res.json();
-      setResult(data);
-      if (data.success && data.analysis) {
-        onSuccess(data.analysis);
-      }
-    } catch (err: any) {
-      setError(err.message || "Đã xảy ra lỗi không xác định.");
+      const data = (await res.json()) as ValidationReport;
+      setReport(data);
+      setSelectedFixes([]);
+      setResult(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  async function handleRepair() {
+    if (selectedFixes.length === 0) return;
+    setLoading(true);
+    setError("");
+    setResult(null);
+    try {
+      const res = await fetch(`/api/epubs/${encodeURIComponent(bookId)}/repair`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fixes: selectedFixes })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Không thể sửa EPUB");
+      }
+      const data = (await res.json()) as RepairResult;
+      setResult(data);
+      if (data.report) {
+        setReport(data.report);
+      }
+      setSelectedFixes([]);
+      if (data.success && data.analysis) {
+        onSuccess(data.analysis);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggleFix(fixId: string) {
+    setSelectedFixes((current) => (current.includes(fixId) ? current.filter((id) => id !== fixId) : [...current, fixId]));
+  }
+
+  function selectAllFixable() {
+    setSelectedFixes(Array.from(new Set(fixableIssues.map((issue) => issue.fixId).filter(Boolean) as string[])));
+  }
 
   return (
     <div className="modalBackdrop" role="presentation" onMouseDown={onClose}>
@@ -56,28 +110,16 @@ export function RepairModal({ open, bookId, bookTitle, onClose, onSuccess }: Pro
         className="metadataModal"
         role="dialog"
         aria-modal="true"
-        onMouseDown={(e) => e.stopPropagation()}
-        style={{
-          width: "min(560px, 95vw)",
-          maxHeight: "90vh",
-          display: "flex",
-          flexDirection: "column",
-          padding: 0,
-          overflow: "hidden",
-          background: "#fbf8f3",
-          border: "1px solid #e6dfd3",
-          boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)"
-        }}
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{ width: "min(820px, 95vw)", maxHeight: "90vh", display: "flex", flexDirection: "column", padding: 0, overflow: "hidden" }}
       >
         <header className="modalHeader" style={{ padding: "16px 20px", borderBottom: "1px solid #e6dfd3" }}>
           <div>
             <h3 style={{ margin: 0, color: "#1f624d", display: "flex", alignItems: "center", gap: "8px" }}>
-              <Wrench size={18} />
-              <span>Sửa lỗi EPUB tự động</span>
+              <ShieldCheck size={18} />
+              <span>Kiểm tra & Sửa EPUB</span>
             </h3>
-            <p style={{ margin: "2px 0 0", color: "#8c8273", fontSize: "12px" }}>
-              {bookTitle}
-            </p>
+            <p style={{ margin: "2px 0 0", color: "#8c8273", fontSize: "12px" }}>{bookTitle}</p>
           </div>
           <button className="iconButton" onClick={onClose} title="Đóng">
             <X size={18} />
@@ -86,161 +128,138 @@ export function RepairModal({ open, bookId, bookTitle, onClose, onSuccess }: Pro
 
         <div style={{ flex: 1, overflowY: "auto", padding: "20px" }}>
           {error && (
-            <div
-              style={{
-                background: "#fdf2f2",
-                border: "1px solid #f8b4b4",
-                color: "#9b1c1c",
-                borderRadius: "8px",
-                padding: "12px",
-                fontSize: "13px",
-                marginBottom: "16px",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px"
-              }}
-            >
+            <div className="error" style={{ marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
               <AlertTriangle size={16} />
               <span>{error}</span>
             </div>
           )}
 
-          {!result && !loading && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-              <div
-                style={{
-                  background: "#edf7f5",
-                  border: "1px solid #cce8e1",
-                  borderRadius: "8px",
-                  padding: "14px",
-                  fontSize: "13px",
-                  color: "#234e43",
-                  lineHeight: "1.5"
-                }}
-              >
-                <strong>Hệ thống sẽ tự động quét và sửa các lỗi cấu trúc EPUB phổ biến:</strong>
-                <ul style={{ margin: "8px 0 0 16px", padding: 0, display: "flex", flexDirection: "column", gap: "6px" }}>
-                  <li><strong>Sửa lỗi Mục lục (TOC/NCX)</strong>: Xóa các liên kết hỏng, loại bỏ các mục trùng lặp, tự động lấy tiêu đề thực tế từ file HTML thay cho tiêu đề rác/rỗng, và renumber lại playOrder.</li>
-                  <li><strong>Đồng bộ TOC & Spine</strong>: Tự động khởi tạo file NCX mục lục mới nếu tệp tin bị thiếu hoặc rỗng.</li>
-                  <li><strong>Sửa cú pháp XHTML</strong>: Tự động đóng các thẻ đơn bị lỗi (<code>br</code>, <code>img</code>, <code>hr</code>, <code>link</code>, <code>meta</code>) để tránh lỗi XML/trang trắng trên Apple Books, Kobo...</li>
-                  <li><strong>Khai báo Namespace XHTML</strong>: Bổ sung thuộc tính <code>xmlns="http://www.w3.org/1999/xhtml"</code> cho thẻ <code>html</code>.</li>
-                  <li><strong>Dọn dẹp Manifest & Spine</strong>: Loại bỏ các chương ảo/lỗi khỏi spine, tự động điền media-type chính xác dựa trên phần mở rộng tệp, và đăng ký các tệp chưa được khai báo vào Manifest.</li>
-                  <li><strong>Chuẩn hóa Mimetype</strong>: Đảm bảo tệp mimetype được viết đầu tiên và lưu ở dạng không nén (Store).</li>
-                </ul>
-              </div>
-
-              <p style={{ fontSize: "12px", color: "#8c8273", lineHeight: "1.5", margin: 0, fontStyle: "italic" }}>
-                * Quá trình này sẽ trực tiếp sửa đổi tệp EPUB gốc trong thư mục <code>edit/</code>. Bạn nên sao lưu trước nếu cần thiết.
-              </p>
-
-              <button
-                type="button"
-                className="smallButton strong"
-                onClick={handleRepair}
-                style={{
-                  width: "100%",
-                  height: "42px",
-                  fontSize: "14px",
-                  fontWeight: "600",
-                  marginTop: "8px",
-                  background: "#2f7d69",
-                  color: "#fff",
-                  borderRadius: "8px",
-                  border: "none",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "8px",
-                  boxShadow: "0 4px 6px -1px rgba(47, 125, 105, 0.2)"
-                }}
-              >
-                <Sparkles size={16} />
-                <span>Bắt đầu sửa lỗi tự động</span>
-              </button>
+          {loading && !report ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "180px", color: "#1f624d", fontWeight: 600 }}>
+              Đang kiểm tra EPUB...
             </div>
-          )}
+          ) : null}
 
-          {loading && (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "40px 0", gap: "16px" }}>
-              <div className="spinner" style={{ width: "36px", height: "36px", border: "3px solid #e6dfd3", borderTopColor: "#2f7d69", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
-                <span style={{ fontSize: "14px", fontWeight: "600", color: "#1f624d" }}>Đang phân tích cấu trúc & sửa lỗi EPUB...</span>
-                <span style={{ fontSize: "12px", color: "#8c8273" }}>Vui lòng đợi trong giây lát.</span>
-              </div>
-              <style dangerouslySetInnerHTML={{ __html: `
-                @keyframes spin {
-                  to { transform: rotate(360deg); }
-                }
-              `}} />
-            </div>
-          )}
-
-          {result && (
+          {report ? (
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px", color: "#1f624d" }}>
-                <CheckCircle size={24} />
-                <span style={{ fontSize: "16px", fontWeight: "600" }}>Hoàn thành sửa lỗi EPUB!</span>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "10px" }}>
+                <Metric label="Status" value={report.valid ? "Valid" : "Invalid"} tone={report.valid ? "#1f624d" : "#9b1c1c"} />
+                <Metric label="Errors" value={String(report.errors)} tone="#9b1c1c" />
+                <Metric label="Warnings" value={String(report.warnings)} tone="#9a5b00" />
+                <Metric label="Info" value={String(report.infos)} tone="#35658f" />
               </div>
 
-              <div>
-                <span style={{ fontSize: "12px", fontWeight: "600", color: "#8c8273", display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
-                  <span>Chi tiết các hoạt động sửa lỗi:</span>
-                </span>
-                <div
-                  style={{
-                    maxHeight: "260px",
-                    overflowY: "auto",
-                    border: "1px solid #e6dfd3",
-                    borderRadius: "6px",
-                    background: "#fff",
-                    padding: "12px 16px",
-                    fontSize: "12px",
-                    fontFamily: "monospace",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "6px"
-                  }}
-                >
-                  {result.logs.map((log, index) => {
-                    let color = "#544f45";
-                    if (log.startsWith("[Mục lục]")) color = "#2f7d69";
-                    else if (log.startsWith("[XHTML]")) color = "#2980b9";
-                    else if (log.startsWith("[Manifest]") || log.startsWith("[Spine]")) color = "#e67e22";
-                    else if (log.startsWith("[Mimetype]")) color = "#8e44ad";
-                    
-                    return (
-                      <div key={index} style={{ color, wordBreak: "break-all", lineHeight: "1.4" }}>
-                        • {log}
-                      </div>
-                    );
-                  })}
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", color: report.valid ? "#1f624d" : "#8f2c18", fontWeight: 650 }}>
+                  {report.valid ? <CheckCircle size={20} /> : <AlertTriangle size={20} />}
+                  <span>{report.valid ? "Không có validation error." : "Có lỗi cần xem lại."}</span>
+                </div>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <button type="button" className="smallButton" onClick={handleValidate} disabled={loading}>
+                    <RefreshCw size={15} />
+                    <span>Kiểm tra lại</span>
+                  </button>
+                  {fixableIssues.length > 0 ? (
+                    <button type="button" className="smallButton" onClick={selectAllFixable} disabled={loading}>
+                      <span>Chọn tất cả có thể sửa</span>
+                    </button>
+                  ) : null}
                 </div>
               </div>
+
+              <div style={{ border: "1px solid #e6dfd3", borderRadius: "8px", overflow: "hidden", background: "#fff" }}>
+                {report.issues.length === 0 ? (
+                  <div style={{ padding: "16px", color: "#6f675c", fontSize: "13px" }}>Không có issue.</div>
+                ) : (
+                  report.issues.map((issue, index) => {
+                    const checked = Boolean(issue.fixId && selectedSet.has(issue.fixId));
+                    return (
+                      <label
+                        key={`${issue.code}-${issue.file || "book"}-${index}`}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "28px 92px minmax(0, 1fr)",
+                          gap: "10px 12px",
+                          padding: "10px 12px",
+                          borderTop: index === 0 ? "none" : "1px solid #eee7dc",
+                          fontSize: "12px",
+                          alignItems: "start",
+                          cursor: issue.fixable ? "pointer" : "default",
+                          background: checked ? "#f4faf7" : "#fff"
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={!issue.fixable || !issue.fixId || loading}
+                          onChange={() => issue.fixId && toggleFix(issue.fixId)}
+                          style={{ marginTop: "2px" }}
+                        />
+                        <strong style={{ color: severityColor[issue.severity] }}>{issue.severity.toUpperCase()}</strong>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 10px", alignItems: "center", marginBottom: "4px", minWidth: 0 }}>
+                            <code style={{ color: "#544f45", whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.35 }}>{issue.code}</code>
+                            {issue.file ? (
+                              <span style={{ color: "#6f675c", wordBreak: "break-all", display: "inline-flex", gap: "5px", alignItems: "center", minWidth: 0 }}>
+                                <FileWarning size={13} style={{ flex: "0 0 auto" }} />
+                                <span style={{ minWidth: 0 }}>{issue.file}</span>
+                              </span>
+                            ) : null}
+                          </div>
+                          <div style={{ color: "#27231e", lineHeight: 1.4, overflowWrap: "anywhere" }}>{issue.message}</div>
+                          {issue.fixable ? (
+                            <div style={{ color: "#1f624d", marginTop: "4px", fontSize: "11px" }}>Có thể sửa: {issue.fixId}</div>
+                          ) : null}
+                        </div>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+
+              {result ? (
+                <div style={{ border: "1px solid #cce8e1", borderRadius: "8px", background: "#f6fbf8", padding: "12px 14px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#1f624d", fontWeight: 650, marginBottom: "8px" }}>
+                    <Wrench size={18} />
+                    <span>Kết quả sửa</span>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "5px", fontSize: "12px", fontFamily: "monospace", color: "#3f493f" }}>
+                    {result.logs.map((log, index) => (
+                      <div key={index} style={{ wordBreak: "break-word" }}>
+                        - {log}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
-          )}
+          ) : null}
         </div>
 
-        <footer className="modalFooter" style={{ padding: "12px 20px", borderTop: "1px solid #e6dfd3", background: "#f3eedf", display: "flex", justifyContent: "flex-end" }}>
-          <button
-            type="button"
-            className="smallButton"
-            onClick={onClose}
-            style={{
-              padding: "8px 16px",
-              fontSize: "13px",
-              fontWeight: "500",
-              cursor: "pointer",
-              borderRadius: "6px",
-              border: "1px solid #c9c6bd",
-              background: "#fff",
-              color: "#544f45"
-            }}
-          >
-            {result ? "Đóng" : "Hủy"}
-          </button>
+        <footer className="modalFooter" style={{ padding: "12px 20px", borderTop: "1px solid #e6dfd3", background: "#f3eedf", display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center" }}>
+          <span style={{ fontSize: "12px", color: "#8c8273" }}>
+            {selectedFixes.length > 0 ? `${selectedFixes.length} nhóm sửa đã chọn` : "Chưa chọn mục sửa"}
+          </span>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button type="button" className="smallButton" onClick={onClose}>
+              Đóng
+            </button>
+            <button type="button" className="smallButton strong" onClick={handleRepair} disabled={loading || selectedFixes.length === 0}>
+              <Wrench size={15} />
+              <span>Sửa mục đã chọn</span>
+            </button>
+          </div>
         </footer>
       </section>
+    </div>
+  );
+}
+
+function Metric({ label, value, tone }: { label: string; value: string; tone: string }) {
+  return (
+    <div style={{ border: "1px solid #e6dfd3", borderRadius: "8px", padding: "10px 12px", background: "#fff" }}>
+      <div style={{ color: "#8c8273", fontSize: "11px", marginBottom: "4px" }}>{label}</div>
+      <div style={{ color: tone, fontWeight: 700, fontSize: "18px" }}>{value}</div>
     </div>
   );
 }

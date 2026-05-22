@@ -89,9 +89,15 @@ type Service struct {
 	launcher     *launcher.Launcher
 	activeRuns   map[string]*ActiveRun
 	activeRunsMu sync.RWMutex
+
+	version      string
+	updateMu     sync.Mutex
+	updateStatus string
+	updatePercent int
+	updateErr    string
 }
 
-func New(workspaceDir string) (*Service, error) {
+func New(workspaceDir string, version string) (*Service, error) {
 	workspace = workspaceDir
 	editDir = filepath.Join(workspace, "edit")
 	if err := os.MkdirAll(editDir, 0755); err != nil {
@@ -102,8 +108,10 @@ func New(workspaceDir string) (*Service, error) {
 		return nil, err
 	}
 	return &Service{
-		locks:      make(map[string]*sync.Mutex),
-		activeRuns: make(map[string]*ActiveRun),
+		locks:        make(map[string]*sync.Mutex),
+		activeRuns:   make(map[string]*ActiveRun),
+		version:      version,
+		updateStatus: "idle",
 	}, nil
 }
 
@@ -184,7 +192,7 @@ func contentTypeFor(name string) string {
 	case ".xhtml", ".html", ".htm":
 		return "application/xhtml+xml"
 	case ".css":
-		return "text/css; charset=utf-8"
+		return "text/css"
 	case ".ncx":
 		return "application/x-dtbncx+xml"
 	case ".opf":
@@ -255,7 +263,8 @@ func isExternalRef(ref string) bool {
 	return strings.HasPrefix(lower, "http://") ||
 		strings.HasPrefix(lower, "https://") ||
 		strings.HasPrefix(lower, "mailto:") ||
-		strings.HasPrefix(lower, "tel:")
+		strings.HasPrefix(lower, "tel:") ||
+		strings.HasPrefix(lower, "data:")
 }
 
 func normalizeZipPath(p string) string {

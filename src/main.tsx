@@ -22,8 +22,10 @@ import {
   type BookAnalysis,
   type BookMetadata,
   type EpubFile,
-  type ExportRange
+  type ExportRange,
+  type UpdateCheckResponse
 } from "./lib/types";
+import { UpdateModal } from "./components/UpdateModal";
 import "./styles.css";
 
 function App() {
@@ -74,10 +76,25 @@ function App() {
   const [repairOpen, setRepairOpen] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [extensionsOpen, setExtensionsOpen] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResponse | null>(null);
 
   useEffect(() => {
     refreshBooks();
+    checkUpdate();
   }, []);
+
+  async function checkUpdate() {
+    try {
+      const res = await api<UpdateCheckResponse>("/api/update/check");
+      if (res && res.updateAvailable) {
+        setUpdateInfo(res);
+        setUpdateOpen(true);
+      }
+    } catch (err) {
+      console.error("Lỗi kiểm tra cập nhật:", err);
+    }
+  }
 
   useEffect(() => {
     if (selectedId) {
@@ -487,7 +504,7 @@ function App() {
                 </button>
                 <button className="smallButton metadataButton" onClick={() => setRepairOpen(true)}>
                   <Wrench size={16} />
-                  <span>Sửa lỗi</span>
+                  <span>Kiểm tra & Sửa</span>
                 </button>
                 <button className="smallButton metadataButton" onClick={() => setFindReplaceOpen(true)}>
                   <Search size={16} />
@@ -689,6 +706,11 @@ function App() {
           }}
         />
       )}
+      <UpdateModal
+        open={updateOpen}
+        onClose={() => setUpdateOpen(false)}
+        updateInfo={updateInfo}
+      />
     </main>
   );
 }
