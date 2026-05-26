@@ -6,3 +6,4 @@ output/
 edit/
 *.exe
 *.exe~
+*.log

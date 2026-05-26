@@ -2,16 +2,19 @@ package service
 
 import (
 	"archive/zip"
+	"bufio"
 	"errors"
 	"fmt"
 	"html"
-	"io"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 
 	"epubforge/internal/models"
@@ -59,6 +62,9 @@ func (s *Service) EditChapters(id string, req ChapterEditRequest) (BookAnalysis,
 	}
 	defer ctx.Close()
 
+	if err := s.pushUndoSnapshot(id); err != nil {
+		return BookAnalysis{}, err
+	}
 	newFileName, err := ctx.EditChapters(req.Action, req.Index, req.TargetIndex, req.NewTitle, req.Content, req.MergeIndices)
 	if err != nil {
 		return BookAnalysis{}, err
@@ -275,7 +281,8 @@ func applySmartQuotes(text string) string {
 
 	for i := 0; i < n; i++ {
 		r := runes[i]
-		if r == '"' {
+		switch r {
+		case '"':
 			prevIsSpace := i == 0 || isWhitespace(runes[i-1]) || runes[i-1] == '(' || runes[i-1] == '[' || runes[i-1] == '{'
 			nextIsSpace := i == n-1 || isWhitespace(runes[i+1]) || runes[i+1] == ')' || runes[i+1] == ']' || runes[i+1] == '}' || isPunctuation(runes[i+1])
 
@@ -288,7 +295,7 @@ func applySmartQuotes(text string) string {
 			} else {
 				result.WriteRune('”')
 			}
-		} else if r == '\'' {
+		case '\'':
 			prevIsSpace := i == 0 || isWhitespace(runes[i-1]) || runes[i-1] == '(' || runes[i-1] == '[' || runes[i-1] == '{'
 			nextIsSpace := i == n-1 || isWhitespace(runes[i+1]) || runes[i+1] == ')' || runes[i+1] == ']' || runes[i+1] == '}' || isPunctuation(runes[i+1])
 
@@ -310,7 +317,7 @@ func applySmartQuotes(text string) string {
 			} else {
 				result.WriteRune('’')
 			}
-		} else {
+		default:
 			result.WriteRune(r)
 		}
 	}
@@ -624,6 +631,11 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 			}
 		}
 
+		deletedIndicesMap := make(map[int]bool)
+		for _, idx := range deletions {
+			deletedIndicesMap[idx] = true
+		}
+
 		for _, idx := range deletions {
 			if idx < 0 || idx >= len(ctx.Chapters) {
 				continue
@@ -638,6 +650,18 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 			if navPath != "" {
 				navHTML = deleteNavLI(navHTML, ctx.Chapters, idx)
 			}
+
+			isPathUsed := false
+			for cIdx, otherCh := range ctx.Chapters {
+				if !deletedIndicesMap[cIdx] && otherCh.Path == ch.Path {
+					isPathUsed = true
+					break
+				}
+			}
+			if !isPathUsed {
+				opfXML = removeManifestItem(opfXML, ch.IDRef)
+				editedFiles[ch.Path] = nil
+			}
 		}
 		editedFiles[ctx.OPFPath] = []byte(opfXML)
 		if ncxXML != "" {
@@ -651,7 +675,6 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 		ch := ctx.Chapters[index]
 
 		opfXML = removeSpineItem(opfXML, ch.IDRef)
-		editedFiles[ctx.OPFPath] = []byte(opfXML)
 
 		if ncxXML != "" {
 			ncxXML = deleteNCXPoint(ncxXML, ctx.Chapters, index)
@@ -662,6 +685,19 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 			navHTML = deleteNavLI(navHTML, ctx.Chapters, index)
 			editedFiles[navPath] = []byte(navHTML)
 		}
+
+		isPathUsed := false
+		for idx, otherCh := range ctx.Chapters {
+			if idx != index && otherCh.Path == ch.Path {
+				isPathUsed = true
+				break
+			}
+		}
+		if !isPathUsed {
+			opfXML = removeManifestItem(opfXML, ch.IDRef)
+			editedFiles[ch.Path] = nil
+		}
+		editedFiles[ctx.OPFPath] = []byte(opfXML)
 
 	case "merge":
 		var chAIdx int
@@ -756,9 +792,26 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 
 		editedFiles[chA.Path] = []byte(currentHTML)
 
+		deletedIndicesMap := make(map[int]bool)
+		for _, idx := range secondaryIndices {
+			deletedIndicesMap[idx] = true
+		}
+
 		for _, idx := range secondaryIndices {
 			ch := ctx.Chapters[idx]
 			opfXML = removeSpineItem(opfXML, ch.IDRef)
+
+			isPathUsed := false
+			for cIdx, otherCh := range ctx.Chapters {
+				if !deletedIndicesMap[cIdx] && otherCh.Path == ch.Path {
+					isPathUsed = true
+					break
+				}
+			}
+			if !isPathUsed {
+				opfXML = removeManifestItem(opfXML, ch.IDRef)
+				editedFiles[ch.Path] = nil
+			}
 		}
 		editedFiles[ctx.OPFPath] = []byte(opfXML)
 
@@ -924,118 +977,82 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 }
 
 func (ctx *BookContext) writeEditedEPUB(editedFiles map[string][]byte) (string, error) {
-	newPath := ctx.FilePath
-
-	var targetPath string
-	isSame := newPath == ctx.FilePath
-	if isSame {
-		targetPath = newPath + ".tmp"
-	} else {
-		targetPath = newPath
-	}
-
-	out, err := os.Create(targetPath)
-	if err != nil {
+	overlayDir := ctx.getOverlayDir()
+	if err := os.MkdirAll(overlayDir, 0755); err != nil {
 		return "", err
 	}
-	zw := zip.NewWriter(out)
 
-	for _, f := range ctx.Reader.File {
-		if content, ok := editedFiles[f.Name]; ok {
-			w, err := zw.CreateHeader(&zip.FileHeader{
-				Name:   f.Name,
-				Method: zip.Deflate,
-			})
-			if err != nil {
-				_ = zw.Close()
-				_ = out.Close()
-				_ = os.Remove(targetPath)
-				return "", err
+	deletedFilePath := filepath.Join(overlayDir, ".deleted")
+	deletedSet := make(map[string]bool)
+	if data, err := os.ReadFile(deletedFilePath); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				deletedSet[normalizeZipPath(line)] = true
 			}
-			if _, err := w.Write(content); err != nil {
-				_ = zw.Close()
-				_ = out.Close()
-				_ = os.Remove(targetPath)
-				return "", err
-			}
+		}
+	}
+
+	for relPath, content := range editedFiles {
+		normalized := normalizeZipPath(relPath)
+		if content == nil {
+			deletedSet[normalized] = true
+			_ = os.Remove(filepath.Join(overlayDir, normalized))
 		} else {
-			rc, err := f.Open()
-			if err != nil {
-				_ = zw.Close()
-				_ = out.Close()
-				_ = os.Remove(targetPath)
+			diskPath := filepath.Join(overlayDir, normalized)
+			if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
 				return "", err
 			}
-			w, err := zw.CreateHeader(&zip.FileHeader{
-				Name:   f.Name,
-				Method: f.Method,
-			})
-			if err != nil {
-				_ = rc.Close()
-				_ = zw.Close()
-				_ = out.Close()
-				_ = os.Remove(targetPath)
+			if err := os.WriteFile(diskPath, content, 0644); err != nil {
 				return "", err
 			}
-			_, err = io.Copy(w, rc)
-			_ = rc.Close()
-			if err != nil {
-				_ = zw.Close()
-				_ = out.Close()
-				_ = os.Remove(targetPath)
-				return "", err
-			}
+			delete(deletedSet, normalized)
 		}
 	}
 
-	for path, content := range editedFiles {
-		found := false
-		for _, f := range ctx.Reader.File {
-			if f.Name == path {
-				found = true
-				break
-			}
-		}
-		if !found {
-			w, err := zw.CreateHeader(&zip.FileHeader{
-				Name:   path,
-				Method: zip.Deflate,
-			})
-			if err != nil {
-				_ = zw.Close()
-				_ = out.Close()
-				_ = os.Remove(targetPath)
-				return "", err
-			}
-			if _, err := w.Write(content); err != nil {
-				_ = zw.Close()
-				_ = out.Close()
-				_ = os.Remove(targetPath)
-				return "", err
-			}
-		}
+	var deletedLines []string
+	for path := range deletedSet {
+		deletedLines = append(deletedLines, path)
 	}
-
-	if err := zw.Close(); err != nil {
-		_ = out.Close()
-		_ = os.Remove(targetPath)
-		return "", err
-	}
-	if err := out.Close(); err != nil {
-		_ = os.Remove(targetPath)
-		return "", err
-	}
-
-	if isSame {
-		_ = ctx.Reader.Close()
-		ctx.Reader = nil
-
-		if err := os.Rename(targetPath, newPath); err != nil {
+	if len(deletedLines) > 0 {
+		if err := os.WriteFile(deletedFilePath, []byte(strings.Join(deletedLines, "\n")), 0644); err != nil {
 			return "", err
 		}
+	} else {
+		_ = os.Remove(deletedFilePath)
 	}
 
-	return filepath.Base(newPath), nil
+	isStructureEdit := false
+	for relPath := range editedFiles {
+		normalized := normalizeZipPath(relPath)
+		if normalized == normalizeZipPath(ctx.OPFPath) ||
+			(ctx.NCX != nil && normalized == normalizeZipPath(ctx.NCX.FullPath)) ||
+			strings.HasSuffix(normalized, ".opf") ||
+			strings.HasSuffix(normalized, ".ncx") ||
+			strings.Contains(normalized, "nav.xhtml") ||
+			strings.Contains(normalized, "toc.html") {
+			isStructureEdit = true
+			break
+		}
+	}
+
+	overlayVersionsMu.Lock()
+	now := time.Now().UnixNano()
+	if isStructureEdit {
+		overlayStructureVersions[ctx.ID] = now
+	}
+	overlayVersions[ctx.ID] = now
+	overlayVersionsMu.Unlock()
+
+	select {
+	case bgSaveChan <- bgSaveJob{id: ctx.ID, filePath: ctx.FilePath}:
+	default:
+		go func() {
+			bgSaveChan <- bgSaveJob{id: ctx.ID, filePath: ctx.FilePath}
+		}()
+	}
+
+	return filepath.Base(ctx.FilePath), nil
 }
 
 func replaceNCXTitle(ncxXML, src, newTitle string) string {
@@ -1062,6 +1079,12 @@ func replaceNavTitle(navHTML, src, newTitle string) string {
 func removeSpineItem(opfXML, id string) string {
 	escapedID := regexp.QuoteMeta(id)
 	re := regexp.MustCompile(`(?is)<itemref\b[^>]*\bidref\s*=\s*["']` + escapedID + `["'][^>]*>`)
+	return re.ReplaceAllString(opfXML, "")
+}
+
+func removeManifestItem(opfXML, id string) string {
+	escapedID := regexp.QuoteMeta(id)
+	re := regexp.MustCompile(`(?is)<item\b[^>]*\bid\s*=\s*["']` + escapedID + `["'][^>]*>`)
 	return re.ReplaceAllString(opfXML, "")
 }
 
@@ -1711,4 +1734,282 @@ func insertNavLIAfter(navHTML string, chapters []models.Chapter, targetIndex int
 
 	li := fmt.Sprintf("\n      <li><a href=\"%s\">%s</a></li>", href, title)
 	return navHTML[:endIdx] + li + navHTML[endIdx:]
+}
+
+type bgSaveJob struct {
+	id       string
+	filePath string
+}
+
+var (
+	bgSaveChan = make(chan bgSaveJob, 100)
+
+	zipWriteLocksMu sync.Mutex
+	zipWriteLocks   = make(map[string]*sync.Mutex)
+
+	pendingJobsMu sync.Mutex
+	pendingJobs   = make(map[string]bool)
+	pendingPaths  = make(map[string]string)
+
+	lastZippedMu sync.RWMutex
+	lastZipped   = make(map[string]int64)
+)
+
+func getZipWriteLock(id string) *sync.Mutex {
+	zipWriteLocksMu.Lock()
+	defer zipWriteLocksMu.Unlock()
+	m, ok := zipWriteLocks[id]
+	if !ok {
+		m = &sync.Mutex{}
+		zipWriteLocks[id] = m
+	}
+	return m
+}
+
+func waitForZipWriteLock(mu *sync.Mutex) {
+	mu.Lock()
+	defer mu.Unlock()
+}
+
+func (s *Service) StartBackgroundWriter() {
+	for job := range bgSaveChan {
+		s.triggerBackgroundZipWrite(job.id, job.filePath)
+	}
+}
+
+func (s *Service) triggerBackgroundZipWrite(id string, filePath string) {
+	pendingJobsMu.Lock()
+	pendingPaths[id] = filePath
+	if pendingJobs[id] {
+		pendingJobsMu.Unlock()
+		return
+	}
+	pendingJobs[id] = true
+	pendingJobsMu.Unlock()
+
+	go func() {
+		time.Sleep(2 * time.Second)
+
+		pendingJobsMu.Lock()
+		delete(pendingJobs, id)
+		pendingJobsMu.Unlock()
+
+		if err := s.consolidateZIP(id, filePath); err != nil {
+			log.Printf("[BgZIP] Error consolidating ZIP for %s: %v", id, err)
+		}
+	}()
+}
+
+func (s *Service) consolidateZIP(id string, filePath string) error {
+	mu := getZipWriteLock(id)
+	mu.Lock()
+	defer mu.Unlock()
+
+	overlayVersionsMu.RLock()
+	lastMod := overlayVersions[id]
+	overlayVersionsMu.RUnlock()
+
+	lastZippedMu.RLock()
+	zippedTime := lastZipped[id]
+	lastZippedMu.RUnlock()
+
+	log.Printf("[BgZIP] Starting ZIP consolidation for %s...", id)
+	if zippedTime >= lastMod {
+		log.Printf("[BgZIP] ZIP already up-to-date for %s, skipping.", id)
+		return nil
+	}
+
+	startTime := time.Now().UnixNano()
+
+	r, err := zip.OpenReader(filePath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	overlayDir := filepath.Join(editDir, ".overlay", id)
+	deletedFilePath := filepath.Join(overlayDir, ".deleted")
+	deletedSet := make(map[string]bool)
+	if data, err := os.ReadFile(deletedFilePath); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				deletedSet[normalizeZipPath(line)] = true
+			}
+		}
+	}
+
+	tmpPath := filePath + ".tmp"
+	out, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+
+	bufOut := bufio.NewWriterSize(out, 2*1024*1024)
+	zw := zip.NewWriter(bufOut)
+	copyBuf := make([]byte, 1024*1024)
+
+	writtenFiles := make(map[string]bool)
+
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		normalized := normalizeZipPath(f.Name)
+		if deletedSet[normalized] {
+			continue
+		}
+
+		overlayPath := filepath.Join(overlayDir, normalized)
+		if _, err := os.Stat(overlayPath); err == nil {
+			w, err := zw.CreateHeader(&zip.FileHeader{
+				Name:   f.Name,
+				Method: zip.Deflate,
+			})
+			if err != nil {
+				_ = zw.Close()
+				_ = out.Close()
+				_ = os.Remove(tmpPath)
+				return err
+			}
+			data, err := os.ReadFile(overlayPath)
+			if err != nil {
+				_ = zw.Close()
+				_ = out.Close()
+				_ = os.Remove(tmpPath)
+				return err
+			}
+			if _, err := w.Write(data); err != nil {
+				_ = zw.Close()
+				_ = out.Close()
+				_ = os.Remove(tmpPath)
+				return err
+			}
+		} else {
+			if err := copyZipEntry(zw, f, copyBuf); err != nil {
+				_ = zw.Close()
+				_ = out.Close()
+				_ = os.Remove(tmpPath)
+				return err
+			}
+		}
+		writtenFiles[normalized] = true
+	}
+
+	err = filepath.Walk(overlayDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(overlayDir, path)
+		if err != nil {
+			return err
+		}
+		normalized := normalizeZipPath(rel)
+		if normalized == ".deleted" {
+			return nil
+		}
+		if writtenFiles[normalized] {
+			return nil
+		}
+
+		w, err := zw.CreateHeader(&zip.FileHeader{
+			Name:   rel,
+			Method: zip.Deflate,
+		})
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write(data); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		_ = zw.Close()
+		_ = out.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+
+	if err := zw.Close(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := bufOut.Flush(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+
+	closeZipReaderForBook(id, nil)
+	_ = r.Close()
+	invalidateBookCacheForPath(filePath)
+
+	bookLock := s.getBookLock(id)
+	bookLock.Lock()
+	defer bookLock.Unlock()
+
+	if err := removeFileWithRetry(filePath); err != nil && !os.IsNotExist(err) {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := renameFileWithRetry(tmpPath, filePath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+
+	_ = os.RemoveAll(overlayDir)
+
+	overlayVersionsMu.Lock()
+	overlayVersions[id] = startTime
+	overlayVersionsMu.Unlock()
+
+	lastZippedMu.Lock()
+	lastZipped[id] = startTime
+	lastZippedMu.Unlock()
+
+	log.Printf("[BgZIP] ZIP consolidation finished successfully for %s.", id)
+	return nil
+}
+
+func (s *Service) FlushAllZipWrites() {
+	pendingJobsMu.Lock()
+	var idsToRun []string
+	for id := range pendingJobs {
+		idsToRun = append(idsToRun, id)
+		delete(pendingJobs, id)
+	}
+	pendingJobsMu.Unlock()
+
+	for _, id := range idsToRun {
+		filePath := pendingPaths[id]
+		if filePath != "" {
+			if err := s.consolidateZIP(id, filePath); err != nil {
+				log.Printf("[BgZIP] Exit-flush: Error consolidating ZIP for %s: %v", id, err)
+			}
+		}
+	}
+
+	zipWriteLocksMu.Lock()
+	var locks []*sync.Mutex
+	for _, l := range zipWriteLocks {
+		locks = append(locks, l)
+	}
+	zipWriteLocksMu.Unlock()
+
+	for _, l := range locks {
+		waitForZipWriteLock(l)
+	}
 }

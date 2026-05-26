@@ -121,6 +121,21 @@ export type ExtensionInfo = {
   name: string;
   description: string;
   inputs: ExtensionInput[];
+  isOfficial: boolean;
+  md5: string;
+  hasUpdate: boolean;
+};
+
+export type StoreExtensionInfo = {
+  id: string;
+  name: string;
+  description: string;
+  inputs: ExtensionInput[];
+  md5: string;
+  downloadUrl: string;
+  size: number;
+  installed: boolean;
+  hasUpdate: boolean;
 };
 
 export type UpdateCheckResponse = {
@@ -138,3 +153,7 @@ export type UpdateProgressResponse = {
   error: string;
 };
 
+export type UndoStatus = {
+  canUndo: boolean;
+  count: number;
+};

@@ -2,6 +2,7 @@ package service
 
 import (
 	"archive/zip"
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -57,7 +58,10 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 	}
 	defer out.Close()
 
-	zw := zip.NewWriter(out)
+	bufOut := bufio.NewWriterSize(out, 2*1024*1024)
+	defer bufOut.Flush()
+
+	zw := zip.NewWriter(bufOut)
 	defer zw.Close()
 
 	mimetypeHeader := &zip.FileHeader{

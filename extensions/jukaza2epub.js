@@ -13,7 +13,7 @@ function register() {
         id: "url",
         type: "text",
         label: "Đường dẫn truyện (Series URL)",
-        placeholder: "https://jukaza.site/truyen/ten-truyen",
+        placeholder: "https://sangtacviet.online/truyen/ten-truyen",
         required: true
       },
       {
@@ -60,8 +60,42 @@ function decryptContent(encryptedStr, cipherKey) {
   return utils.bytesToString(decodedBytes);
 }
 
+function htmlToText(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isLoginPage(html) {
+  const body = String(html || "");
+  return /<form[^>]+action=["'][^"']*\/login["']/i.test(body) &&
+    /name=["']password["']/i.test(body);
+}
+
+function extractLoginError(html) {
+  const body = String(html || "");
+  const known = body.match(/<div[^>]*class=["'][^"']*(?:text-red|bg-red|alert|error)[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+  if (known) {
+    const message = htmlToText(known[1]);
+    if (message) return message;
+  }
+  if (/Thông tin đăng nhập không chính xác/i.test(body)) {
+    return "Thông tin đăng nhập không chính xác.";
+  }
+  return "";
+}
+
 function run(params) {
-  const baseUrl = "https://jukaza.site";
+  const baseUrl = "https://sangtacviet.online";
   const session = http.newSession();
 
   var currentDelay = 300;  
@@ -157,8 +191,15 @@ function run(params) {
     "Content-Type": "application/x-www-form-urlencoded"
   });
   
-  if (!session.HasCookie("jukaza-session")) {
-    throw new Error("Đăng nhập thất bại. Vui lòng kiểm tra lại tài khoản/mật khẩu.");
+  if (!loginResp) {
+    throw new Error("Đăng nhập thất bại: không nhận được phản hồi từ máy chủ.");
+  }
+  if (loginResp.Status >= 400) {
+    throw new Error("Đăng nhập thất bại. HTTP Status: " + loginResp.Status);
+  }
+  const loginError = extractLoginError(loginResp ? loginResp.Body : "");
+  if (loginError || isLoginPage(loginResp.Body)) {
+    throw new Error(loginError ? "Đăng nhập thất bại: " + loginError : "Đăng nhập thất bại. Tài khoản hoặc mật khẩu không đúng, hoặc phiên đăng nhập đã hết hạn.");
   }
 
   console.log("[+] Đăng nhập thành công!");
@@ -167,6 +208,10 @@ function run(params) {
   const seriesResp = session.Get(params.url, {});
   if (seriesResp.Status !== 200) {
     throw new Error("Không thể tải trang truyện chính. HTTP Status: " + seriesResp.Status);
+  }
+  if (isLoginPage(seriesResp.Body)) {
+    const pageLoginError = extractLoginError(seriesResp.Body);
+    throw new Error(pageLoginError ? "Đăng nhập thất bại: " + pageLoginError : "Đăng nhập thất bại. Tài khoản hoặc mật khẩu không đúng, hoặc phiên đăng nhập đã hết hạn.");
   }
 
   let novelTitle = "Unknown Novel";
@@ -194,37 +239,55 @@ function run(params) {
   console.log("[*] Tên truyện: " + novelTitle);
   console.log("[*] Tác giả: " + novelAuthor);
   
-  let chapters = [];
-  const seenUrls = {};
-  const linkRegex = /<a\s+[^>]*href=["']([^"']*\/chuong\/[^"']*)["'][^>]*>([\s\S]*?)<\/a>/g;
-  let match;
-  
-  while ((match = linkRegex.exec(seriesResp.Body)) !== null) {
-    let rawHref = match[1];
-    let fullUrl = rawHref.startsWith("http") ? rawHref : baseUrl + rawHref;
+  function collectChapters(htmlBody) {
+    const found = [];
+    const seenUrls = {};
+    const linkRegex = /<a\s+[^>]*href=["']([^"']*\/chuong\/[^"']*)["'][^>]*>([\s\S]*?)<\/a>/g;
+    let match;
     
-    let title = match[2].replace(/<[^>]+>/g, "").trim();
-    title = title.replace(/&nbsp;/g, " ");
-    title = title.replace(/\s+/g, " ").trim();
-    
-    const lowerTitle = title.toLowerCase();
-    if (lowerTitle.indexOf("đọc từ đầu") !== -1 || lowerTitle.indexOf("đọc tiếp") !== -1) {
-      continue;
-    }
+    while ((match = linkRegex.exec(htmlBody || "")) !== null) {
+      let rawHref = match[1];
+      let fullUrl = rawHref.startsWith("http") ? rawHref : baseUrl + rawHref;
+      
+      let title = match[2].replace(/<[^>]+>/g, "").trim();
+      title = title.replace(/&nbsp;/g, " ");
+      title = title.replace(/\s+/g, " ").trim();
+      
+      const lowerTitle = title.toLowerCase();
+      if (lowerTitle.indexOf("đọc từ đầu") !== -1 || lowerTitle.indexOf("đọc tiếp") !== -1 || lowerTitle.indexOf("tiếp tục đọc") !== -1) {
+        continue;
+      }
 
-    if (!title) {
-      title = "Chương " + (chapters.length + 1);
+      if (!title) {
+        title = "Chương " + (found.length + 1);
+      }
+      
+      if (!seenUrls[fullUrl]) {
+        found.push({ title: title, url: fullUrl });
+        seenUrls[fullUrl] = true;
+      }
     }
-    
-    if (!seenUrls[fullUrl]) {
-      chapters.push({ title: title, url: fullUrl });
-      seenUrls[fullUrl] = true;
-    }
+    return found;
   }
 
   function extractChapterId(url) {
     const match = url.match(/\/chuong\/(\d+)/);
     return match ? parseInt(match[1], 10) : 0;
+  }
+
+  let chapters = collectChapters(seriesResp.Body);
+  for (let listAttempt = 1; chapters.length === 0 && listAttempt <= 3; listAttempt++) {
+    console.log("[*] Chưa thấy danh sách chương, tải lại trang truyện (lượt " + listAttempt + "/3)...");
+    utils.sleep(1000 * listAttempt);
+    const retrySeriesResp = session.Get(params.url, {});
+    if (retrySeriesResp.Status !== 200) {
+      throw new Error("Không thể tải trang truyện chính. HTTP Status: " + retrySeriesResp.Status);
+    }
+    if (isLoginPage(retrySeriesResp.Body)) {
+      const retryLoginError = extractLoginError(retrySeriesResp.Body);
+      throw new Error(retryLoginError ? "Đăng nhập thất bại: " + retryLoginError : "Đăng nhập thất bại. Tài khoản hoặc mật khẩu không đúng, hoặc phiên đăng nhập đã hết hạn.");
+    }
+    chapters = collectChapters(retrySeriesResp.Body);
   }
   chapters.sort(function(a, b) {
     return extractChapterId(a.url) - extractChapterId(b.url);
@@ -375,6 +438,7 @@ function run(params) {
     }
 
     const downloadedImages = {};
+    const failedImages = {};
     for (let imgIndex = 0; imgIndex < imageSources.length; imgIndex++) {
       const origSrc = imageSources[imgIndex];
       let fullImgUrl = origSrc;
@@ -385,6 +449,7 @@ function run(params) {
       }
       
       let imgRespBase64 = null;
+      let imageMissing404 = false;
       for (let imgAttempt = 0; imgAttempt < 5; imgAttempt++) {
         try {
           imgRespBase64 = session.GetBinaryBase64(fullImgUrl, { "Referer": chap.url });
@@ -392,6 +457,12 @@ function run(params) {
             break;
           }
         } catch (errImg) {
+          if (String(errImg.message || "").indexOf("HTTP 404") !== -1) {
+            console.log("  [*] Bỏ qua ảnh không tồn tại trên máy chủ: " + fullImgUrl);
+            failedImages[origSrc] = true;
+            imageMissing404 = true;
+            break;
+          }
           console.log("  [*] Lỗi tải ảnh (lượt " + (imgAttempt + 1) + "/5): " + errImg.message);
         }
         if (imgAttempt < 4) {
@@ -409,12 +480,18 @@ function run(params) {
         downloadedImages[origSrc] = internalFilename;
         imageCounter++;
       } else {
-        console.log("  [-] Không thể tải ảnh trong chương sau 5 lần thử: " + fullImgUrl);
+        failedImages[origSrc] = true;
+        if (!imageMissing404) {
+          console.log("  [-] Không thể tải ảnh trong chương sau 5 lần thử: " + fullImgUrl);
+        }
       }
     }
     
     decrypted = decrypted.replace(imgUrlRegex, function(tag, src) {
       if (!downloadedImages[src]) {
+        if (failedImages[src]) {
+          return "";
+        }
         return tag;
       }
       return tag.replace(src, downloadedImages[src]);

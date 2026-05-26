@@ -126,6 +126,9 @@ func (s *Service) EmbedFont(id string, fontName string, fontFileName string, fon
 		editedFiles[cssPath] = []byte(cssContent)
 	}
 
+	if err := s.pushUndoSnapshot(id); err != nil {
+		return BookAnalysis{}, err
+	}
 	newFileName, err := ctx.writeEditedEPUB(editedFiles)
 	if err != nil {
 		return BookAnalysis{}, err

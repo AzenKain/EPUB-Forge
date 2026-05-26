@@ -344,7 +344,6 @@ func (s *Service) doUpdate(ctx context.Context) error {
 	return nil
 }
 
-// RestartApp launches a new instance of the application and exits the current one.
 func (s *Service) RestartApp() {
 	self, err := os.Executable()
 	if err != nil {

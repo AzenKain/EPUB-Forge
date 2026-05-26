@@ -51,6 +51,10 @@ func repairFixForIssue(code string) (string, bool) {
 		return "FIX_XHTML", true
 	case "NCX_LINK_MISSING", "NCX_IDREF_MISSING":
 		return "FIX_TOC_NCX", true
+	case "VISIBLE_TOC_PAGE_MISSING":
+		return "BUILD_TOC_PAGE", true
+	case "COVER_PAGE_MISSING":
+		return "BUILD_COVER_PAGE", true
 	case "LINK_TARGET_MISSING":
 		return "CLEAN_BROKEN_CONTENT_LINKS", true
 	default:
@@ -249,6 +253,16 @@ func (ctx *BookContext) validateNavigation(b *validationBuilder) {
 			if point.FullPath == "" || ctx.Entries[point.FullPath] == nil {
 				b.add("error", "NCX_LINK_MISSING", ctx.NCX.FullPath, "NCX points to missing file: "+point.Src)
 			}
+		}
+	}
+
+	if tocItem, ok := ctx.findVisibleTOCItem(); !ok || tocItem == nil || ctx.Entries[tocItem.FullPath] == nil || !ctx.spineUsesID(tocItem.ID) {
+		b.add("info", "VISIBLE_TOC_PAGE_MISSING", ctx.OPFPath, "EPUB has no visible TOC page in the reading order")
+	}
+
+	if coverImage := ctx.findCoverImageItem(); coverImage != nil {
+		if coverPage, ok := ctx.findCoverPageItem(); !ok || coverPage == nil || ctx.Entries[coverPage.FullPath] == nil || !ctx.spineUsesID(coverPage.ID) {
+			b.add("info", "COVER_PAGE_MISSING", coverImage.FullPath, "EPUB has a cover image but no cover page in the reading order")
 		}
 	}
 }

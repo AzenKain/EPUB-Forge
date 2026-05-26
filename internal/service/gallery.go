@@ -2,6 +2,7 @@ package service
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,19 @@ import (
 
 	"epubforge/internal/models"
 )
+
+type GalleryDownloadInfo struct {
+	FileName    string
+	ContentType string
+	Count       int
+	Zipped      bool
+}
+
+type galleryDownloadFile struct {
+	FullPath string
+	Item     ManifestItem
+	File     *zip.File
+}
 
 func (s *Service) GetGallery(id string) (models.GalleryResponse, error) {
 	lock := s.getBookLock(id)
@@ -298,96 +312,218 @@ func (s *Service) SaveGallery(id string, req models.SaveGalleryRequest) (models.
 		editedFiles[navPath] = []byte(navHTML)
 	}
 
-	tmp := ctx.FilePath + ".tmp"
-	out, err := os.Create(tmp)
+	if err := s.pushUndoSnapshot(id); err != nil {
+		return models.BookAnalysis{}, err
+	}
+	newFileName, err := ctx.writeEditedEPUB(editedFiles)
 	if err != nil {
 		return models.BookAnalysis{}, err
 	}
-	zw := zip.NewWriter(out)
 
-	for _, f := range ctx.Reader.File {
-		if content, ok := editedFiles[f.Name]; ok {
-			w, err := zw.CreateHeader(&zip.FileHeader{
-				Name:   f.Name,
-				Method: zip.Deflate,
-			})
-			if err != nil {
-				return closeGalleryZipErr(zw, out, tmp, err)
-			}
-			if _, err := w.Write(content); err != nil {
-				return closeGalleryZipErr(zw, out, tmp, err)
-			}
-		} else {
-			rc, err := f.Open()
-			if err != nil {
-				return closeGalleryZipErr(zw, out, tmp, err)
-			}
-			w, err := zw.CreateHeader(&zip.FileHeader{
-				Name:   f.Name,
-				Method: f.Method,
-			})
-			if err != nil {
-				_ = rc.Close()
-				return closeGalleryZipErr(zw, out, tmp, err)
-			}
-			_, err = io.Copy(w, rc)
-			_ = rc.Close()
-			if err != nil {
-				return closeGalleryZipErr(zw, out, tmp, err)
-			}
-		}
-	}
-
-	for path, content := range editedFiles {
-		found := false
-		for _, f := range ctx.Reader.File {
-			if f.Name == path {
-				found = true
-				break
-			}
-		}
-		if !found {
-			header := &zip.FileHeader{Name: path, Method: zip.Deflate}
-			header.SetMode(0644)
-			w, err := zw.CreateHeader(header)
-			if err != nil {
-				return closeGalleryZipErr(zw, out, tmp, err)
-			}
-			if _, err := w.Write(content); err != nil {
-				return closeGalleryZipErr(zw, out, tmp, err)
-			}
-		}
-	}
-
-	if err := zw.Close(); err != nil {
-		_ = out.Close()
-		_ = os.Remove(tmp)
-		return models.BookAnalysis{}, err
-	}
-	if err := out.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return models.BookAnalysis{}, err
-	}
-
-	_ = ctx.Reader.Close()
-	ctx.Reader = nil
-
-	if err := os.Remove(ctx.FilePath); err != nil {
-		_ = os.Remove(tmp)
-		return models.BookAnalysis{}, err
-	}
-	if err := os.Rename(tmp, ctx.FilePath); err != nil {
-		_ = os.Remove(tmp)
-		return models.BookAnalysis{}, err
-	}
-
-	newCtx, err := loadBook(id)
+	newCtx, err := loadBook(toID(newFileName))
 	if err != nil {
 		return models.BookAnalysis{}, err
 	}
 	defer newCtx.Close()
 
 	return newCtx.Analysis(), nil
+}
+
+func (s *Service) StreamGalleryDownload(id string, paths []string, all bool, dst io.Writer, onReady func(GalleryDownloadInfo)) error {
+	lock := s.getBookLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	ctx, err := loadBook(id)
+	if err != nil {
+		return err
+	}
+	defer ctx.Close()
+
+	files, err := ctx.selectGalleryDownloadFiles(paths, all)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return errors.New("no gallery images selected")
+	}
+
+	if len(files) == 1 {
+		file := files[0]
+		name := galleryDownloadFileName(file.FullPath)
+		contentType := file.Item.MediaType
+		if contentType == "" {
+			contentType = contentTypeFor(file.FullPath)
+		}
+		if onReady != nil {
+			onReady(GalleryDownloadInfo{
+				FileName:    name,
+				ContentType: contentType,
+				Count:       1,
+				Zipped:      false,
+			})
+		}
+
+		rc, err := file.File.Open()
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		_, err = io.CopyBuffer(dst, rc, make([]byte, 64*1024))
+		return err
+	}
+
+	title := strings.TrimSpace(ctx.Metadata.Title)
+	if title == "" {
+		title = strings.TrimSpace(ctx.Title)
+	}
+	if title == "" {
+		title = "gallery"
+	}
+	zipName := sanitizeFileNameLimit(title, 70) + " - images.zip"
+	if onReady != nil {
+		onReady(GalleryDownloadInfo{
+			FileName:    zipName,
+			ContentType: "application/zip",
+			Count:       len(files),
+			Zipped:      true,
+		})
+	}
+
+	zw := zip.NewWriter(dst)
+	usedNames := make(map[string]int, len(files))
+	buf := make([]byte, 64*1024)
+	for i, file := range files {
+		rc, err := file.File.Open()
+		if err != nil {
+			_ = zw.Close()
+			return err
+		}
+
+		header := &zip.FileHeader{
+			Name:   galleryZipEntryName(i+1, file.FullPath, usedNames),
+			Method: zip.Store,
+		}
+		if !file.File.Modified.IsZero() {
+			header.SetModTime(file.File.Modified)
+		}
+		writer, err := zw.CreateHeader(header)
+		if err != nil {
+			_ = rc.Close()
+			_ = zw.Close()
+			return err
+		}
+		if _, err = io.CopyBuffer(writer, rc, buf); err != nil {
+			_ = rc.Close()
+			_ = zw.Close()
+			return err
+		}
+		if err = rc.Close(); err != nil {
+			_ = zw.Close()
+			return err
+		}
+	}
+	return zw.Close()
+}
+
+func (ctx *BookContext) selectGalleryDownloadFiles(paths []string, all bool) ([]galleryDownloadFile, error) {
+	if all {
+		files := make([]galleryDownloadFile, 0)
+		for _, item := range ctx.Manifest {
+			if !isGalleryImageItem(item) {
+				continue
+			}
+			f, ok := ctx.Entries[item.FullPath]
+			if !ok {
+				continue
+			}
+			files = append(files, galleryDownloadFile{FullPath: item.FullPath, Item: item, File: f})
+		}
+		sort.Slice(files, func(i, j int) bool {
+			return strings.Compare(files[i].FullPath, files[j].FullPath) < 0
+		})
+		return files, nil
+	}
+
+	seen := make(map[string]bool, len(paths))
+	files := make([]galleryDownloadFile, 0, len(paths))
+	for _, rawPath := range paths {
+		rawPath = strings.TrimSpace(rawPath)
+		if rawPath == "" {
+			continue
+		}
+		item, ok := ctx.resolveGalleryImageItem(rawPath)
+		if !ok {
+			return nil, fmt.Errorf("gallery image not found: %s", rawPath)
+		}
+		if seen[item.FullPath] {
+			continue
+		}
+		f, ok := ctx.Entries[item.FullPath]
+		if !ok {
+			return nil, fmt.Errorf("gallery image file missing: %s", item.FullPath)
+		}
+		seen[item.FullPath] = true
+		files = append(files, galleryDownloadFile{FullPath: item.FullPath, Item: item, File: f})
+	}
+	return files, nil
+}
+
+func (ctx *BookContext) resolveGalleryImageItem(rawPath string) (ManifestItem, bool) {
+	candidates := []string{
+		normalizeZipPath(rawPath),
+		resolveZipHref(ctx.OPFDir, rawPath),
+	}
+	for _, candidate := range candidates {
+		if item, ok := ctx.ManifestByPath[candidate]; ok && isGalleryImageItem(item) {
+			return item, true
+		}
+	}
+	for _, item := range ctx.Manifest {
+		if isGalleryImageItem(item) && (item.Href == rawPath || item.FullPath == rawPath) {
+			return item, true
+		}
+	}
+	return ManifestItem{}, false
+}
+
+func isGalleryImageItem(item ManifestItem) bool {
+	mediaType := strings.ToLower(item.MediaType)
+	return strings.HasPrefix(mediaType, "image/")
+}
+
+func galleryDownloadFileName(fullPath string) string {
+	name := zipPathBase(fullPath)
+	if name == "" {
+		name = "image"
+	}
+	return sanitizeFileNameLimit(name, 120)
+}
+
+func galleryZipEntryName(index int, fullPath string, used map[string]int) string {
+	base := galleryDownloadFileName(fullPath)
+	if base == "" || base == "epub" {
+		base = fmt.Sprintf("image-%03d", index)
+	}
+	name := fmt.Sprintf("%03d_%s", index, base)
+	if count := used[name]; count > 0 {
+		used[name] = count + 1
+		return fmt.Sprintf("%03d_%d_%s", index, count+1, base)
+	}
+	used[name] = 1
+	return name
+}
+
+func zipPathBase(fullPath string) string {
+	clean := strings.Trim(strings.ReplaceAll(fullPath, "\\", "/"), "/")
+	if clean == "" {
+		return ""
+	}
+	idx := strings.LastIndex(clean, "/")
+	if idx >= 0 {
+		return clean[idx+1:]
+	}
+	return clean
 }
 
 func closeGalleryZipErr(zw *zip.Writer, out *os.File, tmp string, err error) (models.BookAnalysis, error) {

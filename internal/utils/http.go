@@ -10,9 +10,24 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sync"
+	"time"
 )
 
+type cachedEmbeddedFile struct {
+	data    []byte
+	modTime time.Time
+}
+
+var embeddedFileCache sync.Map
+
 func ServeEmbeddedFile(w http.ResponseWriter, r *http.Request, dist fs.FS, name string) bool {
+	if cached, ok := embeddedFileCache.Load(name); ok {
+		file := cached.(cachedEmbeddedFile)
+		http.ServeContent(w, r, name, file.modTime, bytes.NewReader(file.data))
+		return true
+	}
+
 	file, err := dist.Open(name)
 	if err != nil {
 		return false
@@ -26,6 +41,7 @@ func ServeEmbeddedFile(w http.ResponseWriter, r *http.Request, dist fs.FS, name 
 	if err != nil {
 		return false
 	}
+	embeddedFileCache.Store(name, cachedEmbeddedFile{data: data, modTime: info.ModTime()})
 	http.ServeContent(w, r, name, info.ModTime(), bytes.NewReader(data))
 	return true
 }

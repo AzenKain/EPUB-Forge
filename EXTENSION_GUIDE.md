@@ -348,6 +348,44 @@ utils.sleep(1500);  // Nghỉ 1.5 giây giữa mỗi request
 
 ---
 
+### `utils.choose(prompt, options, multiple)`
+
+Tạm dừng extension và yêu cầu người dùng chọn một hoặc nhiều mục trực tiếp trong UI. Backend sẽ gửi sự kiện `choice_required`, React sẽ hiển thị panel lựa chọn trong Extension Center, rồi extension tiếp tục chạy sau khi người dùng xác nhận.
+
+API này phù hợp cho các scraper cần quét trang trước rồi mới biết danh sách cần chọn, ví dụ một trang series Hako/DocLN có nhiều volume. Có thể kết hợp với input text tùy chọn như `volumeSelection`: nếu người dùng nhập sẵn `all`, `1`, `1-3`, `1,4` thì extension chạy ngay; nếu bỏ trống thì gọi `utils.choose(...)` để chọn trên UI sau khi quét.
+
+**Tham số:**
+
+| Tham số | Kiểu | Mô tả |
+|---------|------|-------|
+| `prompt` | `string` | Tiêu đề/câu hỏi hiển thị trên UI |
+| `options` | `Array<{ id, label, description? }>` | Danh sách lựa chọn. `id` là giá trị trả về cho extension |
+| `multiple` | `boolean` | `true` = checkbox chọn nhiều; `false` = radio chọn một |
+
+**Trả về:** `string[]` chứa các `id` đã chọn. Khi `multiple: false`, mảng vẫn được trả về nhưng chỉ có tối đa một phần tử.
+
+```javascript
+let selectedVolumeIDs = parseVolumeSelectionSpec(params.volumeSelection, volumes.length);
+
+if (!selectedVolumeIDs) {
+  const options = [];
+  for (let i = 0; i < volumes.length; i++) {
+    options.push({
+      id: String(volumes[i].index),
+      label: "[" + volumes[i].index + "] " + volumes[i].title,
+      description: volumes[i].chapters.length + " chương"
+    });
+  }
+
+  // UI sẽ hiện checkbox và mặc định chọn tất cả option.
+  selectedVolumeIDs = utils.choose("Chọn volume muốn tải", options, true);
+}
+```
+
+> **Lưu ý:** `utils.choose` chỉ nên dùng sau khi extension đã có đủ danh sách lựa chọn. Không cần khai báo các lựa chọn động này trong `register().inputs`.
+
+---
+
 ### `utils.base64ToBytes(str)`
 
 Giải mã chuỗi Base64 thành mảng byte. Được thực thi bằng Go native nên rất nhanh.
@@ -682,16 +720,20 @@ function run(params) {
 
 Dùng khi một URL chứa nhiều tập/volume và bạn muốn tạo **nhiều file EPUB riêng biệt** cùng lúc. Trả về mảng trực tiếp.
 
+**Quy tắc metadata cho trang series có nhiều volume:** Nếu một trang series liệt kê nhiều volume (ví dụ Hako/DocLN có nhiều `<section class="volume-list">`), extension **không được** gộp tất cả chapter vào một ebook duy nhất. Mỗi volume phải là một ebook riêng. Trường `title` và `metadata.title` là tên volume lấy từ heading của volume (ví dụ `Vol 1`, `Tập 02`, `Arc 3`), còn tên truyện chính phải đặt trong `metadata.series`; thứ tự volume đặt trong `metadata.seriesIndex`.
+
+**Chọn volume trong UI:** Không cần bắt người dùng nhập volume từ đầu nếu danh sách volume chỉ biết sau khi quét trang. Hãy để input như `volumeSelection` là tùy chọn; nếu bỏ trống, gọi `utils.choose(...)` sau khi đã thu được danh sách volume. Extension vẫn trả về nhiều ebook riêng cho các volume được chọn.
+
 ```javascript
 function run(params) {
   // ... logic scrape tất cả volumes ...
 
   return [
     {
-      title: "Sword Art Online - Tập 01",
+      title: "Tập 01: Aincrad",
       author: "Kawahara Reki",
       metadata: {
-        title: "Sword Art Online - Tập 01",
+        title: "Tập 01: Aincrad",
         creator: "Kawahara Reki",
         language: "vi",
         series: "Sword Art Online",
@@ -705,10 +747,10 @@ function run(params) {
       images: { }
     },
     {
-      title: "Sword Art Online - Tập 02",
+      title: "Tập 02: Fairy Dance",
       author: "Kawahara Reki",
       metadata: {
-        title: "Sword Art Online - Tập 02",
+        title: "Tập 02: Fairy Dance",
         creator: "Kawahara Reki",
         language: "vi",
         series: "Sword Art Online",
@@ -725,7 +767,7 @@ function run(params) {
 }
 ```
 
-**Kết quả:** EPUBForge tạo 2 file EPUB → `Sword Art Online - Tập 01.epub` + `Sword Art Online - Tập 02.epub`
+**Kết quả:** EPUBForge tạo 2 file EPUB → `Tập 01: Aincrad.epub` + `Tập 02: Fairy Dance.epub`; cả hai file đều có metadata series là `Sword Art Online`.
 
 ---
 
@@ -738,16 +780,28 @@ function run(params) {
   return {
     ebooks: [
       {
-        title: "Tên Truyện - Tập 01",
+        title: "Tập 01",
         author: "Tác Giả",
-        metadata: { title: "Tên Truyện - Tập 01", creator: "Tác Giả", language: "vi" },
+        metadata: {
+          title: "Tập 01",
+          creator: "Tác Giả",
+          language: "vi",
+          series: "Tên Truyện",
+          seriesIndex: "1"
+        },
         chapters: [ /* ... */ ],
         images: { }
       },
       {
-        title: "Tên Truyện - Tập 02",
+        title: "Tập 02",
         author: "Tác Giả",
-        metadata: { title: "Tên Truyện - Tập 02", creator: "Tác Giả", language: "vi" },
+        metadata: {
+          title: "Tập 02",
+          creator: "Tác Giả",
+          language: "vi",
+          series: "Tên Truyện",
+          seriesIndex: "2"
+        },
         chapters: [ /* ... */ ],
         images: { }
       }
@@ -935,6 +989,23 @@ if (!content.match(/<(p|br|div)[^>]*>/i)) {
 
 Hoặc đơn giản hơn, đặt `rawHtml: false` trong chapter object — EPUBForge sẽ tự wrap.
 
-### 6. Dừng Extension
+### 6. Xử lý trang minh họa chỉ có ảnh
+
+Một số site có mục `Minh họa`, `Illustrations`, hoặc gallery đầu volume chỉ chứa `<img>` và gần như không có text. Không nên coi các trang này là lỗi rỗng chỉ vì `htmlToText(content)` ngắn. Nếu khối nội dung có `<img>`, hãy giữ nội dung, tải ảnh vào map `images`, rồi thay `src` trong HTML sang đường dẫn nội bộ.
+
+```javascript
+let content = innerById(html, "chapter-content");
+
+// Chỉ fallback sang selector khác khi nội dung không có text và cũng không có ảnh.
+if (!content || (!/<img\b/i.test(content) && htmlToText(content).length < 20)) {
+  content = firstMatch(html, /<div[^>]*id=["']chapter-c-protected["'][^>]*>([\s\S]*?)<\/div>/i);
+}
+
+if (!content || (!/<img\b/i.test(content) && htmlToText(content).length < 5)) {
+  throw new Error("Không tìm thấy nội dung chương hoặc nội dung bị khóa: " + chapterTitle);
+}
+```
+
+### 7. Dừng Extension
 
 Extension sẽ chạy cho đến khi hoàn tất hoặc người dùng bấm nút **"Dừng (Ngắt)"** trên giao diện. Không có giới hạn thời gian chạy.

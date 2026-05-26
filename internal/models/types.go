@@ -6,6 +6,15 @@ type EpubFile struct {
 	Size int64  `json:"size"`
 }
 
+type RenameEpubRequest struct {
+	Name string `json:"name"`
+}
+
+type UndoStatus struct {
+	CanUndo bool `json:"canUndo"`
+	Count   int  `json:"count"`
+}
+
 type Chapter struct {
 	Index     int    `json:"index"`
 	IDRef     string `json:"idref"`
@@ -230,6 +239,11 @@ type GalleryImage struct {
 
 type SaveGalleryRequest struct {
 	Images []GalleryImage `json:"images"`
+}
+
+type GalleryDownloadRequest struct {
+	Paths []string `json:"paths"`
+	All   bool     `json:"all"`
 }
 
 type GalleryResponse struct {

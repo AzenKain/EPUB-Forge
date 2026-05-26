@@ -2,6 +2,7 @@ package service
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"fmt"
 	"image"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"epubforge/internal/models"
 
@@ -19,6 +21,10 @@ import (
 )
 
 func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.OptimizeResponse, error) {
+	zipMu := getZipWriteLock(id)
+	zipMu.Lock()
+	defer zipMu.Unlock()
+
 	lock := s.getBookLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -29,27 +35,10 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 	}
 	defer ctx.Close()
 
-	var combinedContentBuilder strings.Builder
-	for _, item := range ctx.Manifest {
-		ext := strings.ToLower(filepath.Ext(item.FullPath))
-		if ext == ".xhtml" || ext == ".html" || ext == ".htm" || ext == ".css" {
-			if content, err := ctx.readText(item.FullPath); err == nil {
-				combinedContentBuilder.WriteString(content)
-				combinedContentBuilder.WriteString("\n")
-			}
-		}
-	}
-	combinedContent := combinedContentBuilder.String()
-
-	coverPath := ""
-	if coverID := ctx.coverID(); coverID != "" {
-		if item, ok := ctx.ManifestByID[coverID]; ok {
-			coverPath = item.FullPath
-		}
-	}
+	reachablePaths, reachableContent := ctx.optimizationReachablePaths()
 
 	removedPaths := make(map[string]bool)
-	var removedList []string
+	removedList := []string{}
 
 	for name, f := range ctx.Entries {
 		if f.FileInfo().IsDir() {
@@ -73,11 +62,7 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 			continue
 		}
 
-		if coverPath != "" && name == coverPath {
-			continue
-		}
-
-		baseName := filepath.Base(name)
+		baseName := zipBaseName(name)
 		ext := strings.ToLower(filepath.Ext(name))
 
 		isUnusedCandidate := false
@@ -88,7 +73,7 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 		}
 
 		if isUnusedCandidate {
-			isUsed := strings.Contains(combinedContent, baseName) || strings.Contains(combinedContent, name)
+			isUsed := reachablePaths[name] || strings.Contains(reachableContent, baseName) || strings.Contains(reachableContent, name)
 			if !isUsed {
 				removedPaths[name] = true
 				removedList = append(removedList, name)
@@ -102,92 +87,171 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 		New string
 	}
 	var basenameReplacements []BasenameReplacement
-	convertedBytes := make(map[string][]byte)
+	processedBytes := make(map[string][]byte)
 
-	if req.ConvertToWebp {
-		for name, f := range ctx.Entries {
-			if f.FileInfo().IsDir() {
-				continue
-			}
-			if removedPaths[name] {
+	if req.ConvertToWebp || req.CompressImages {
+		type imageTask struct {
+			name string
+			file *zip.File
+			ext  string
+		}
+		type imageResult struct {
+			name      string
+			newName   string
+			data      []byte
+			converted bool
+		}
+
+		var tasks []imageTask
+		for _, f := range ctx.Reader.File {
+			name := f.Name
+			if f.FileInfo().IsDir() || removedPaths[name] {
 				continue
 			}
 			ext := strings.ToLower(filepath.Ext(name))
-			if ext == ".jpg" || ext == ".jpeg" || ext == ".png" {
-				rc, err := f.Open()
-				if err != nil {
-					continue
-				}
-				originalData, err := io.ReadAll(rc)
-				_ = rc.Close()
-				if err != nil {
-					continue
-				}
-				webpData, err := convertToWebp(originalData, req.ImageQuality)
-				if err == nil {
-					newExt := ".webp"
-					newName := name[:len(name)-len(ext)] + newExt
-					renameMap[name] = newName
-					convertedBytes[name] = webpData
+			if ext != ".jpg" && ext != ".jpeg" && ext != ".png" {
+				continue
+			}
+			tasks = append(tasks, imageTask{name: name, file: f, ext: ext})
+		}
 
-					oldBase := filepath.Base(name)
-					newBase := filepath.Base(newName)
+		if len(tasks) > 0 {
+			taskCh := make(chan imageTask)
+			resultCh := make(chan imageResult, len(tasks))
+			workers := workerCount(len(tasks))
+			var wg sync.WaitGroup
+
+			wg.Add(workers)
+			for i := 0; i < workers; i++ {
+				go func() {
+					defer wg.Done()
+					for task := range taskCh {
+						rc, err := task.file.Open()
+						if err != nil {
+							continue
+						}
+						originalData, err := io.ReadAll(rc)
+						_ = rc.Close()
+						if err != nil {
+							continue
+						}
+
+						if req.ConvertToWebp {
+							if webpData, err := convertToWebp(originalData, req.ImageQuality); err == nil {
+								resultCh <- imageResult{
+									name:      task.name,
+									newName:   task.name[:len(task.name)-len(task.ext)] + ".webp",
+									data:      webpData,
+									converted: true,
+								}
+								continue
+							}
+						}
+
+						if req.CompressImages {
+							compressed := compressImage(task.name, originalData, req.ImageQuality)
+							if len(compressed) < len(originalData) {
+								resultCh <- imageResult{name: task.name, data: compressed}
+							}
+						}
+					}
+				}()
+			}
+
+			go func() {
+				for _, task := range tasks {
+					taskCh <- task
+				}
+				close(taskCh)
+				wg.Wait()
+				close(resultCh)
+			}()
+
+			for result := range resultCh {
+				if result.converted {
+					renameMap[result.name] = result.newName
+					processedBytes[result.name] = result.data
+
 					basenameReplacements = append(basenameReplacements, BasenameReplacement{
-						Old: oldBase,
-						New: newBase,
+						Old: zipBaseName(result.name),
+						New: zipBaseName(result.newName),
 					})
+					continue
+				}
+				if len(result.data) > 0 {
+					processedBytes[result.name] = result.data
 				}
 			}
 		}
+
 		sort.Slice(basenameReplacements, func(i, j int) bool {
 			return len(basenameReplacements[i].Old) > len(basenameReplacements[j].Old)
 		})
 	}
 
+	if err := s.pushUndoSnapshot(id); err != nil {
+		return models.OptimizeResponse{}, err
+	}
 	tmpPath := ctx.FilePath + ".tmp"
 	out, err := os.Create(tmpPath)
 	if err != nil {
 		return models.OptimizeResponse{}, err
 	}
-	zw := zip.NewWriter(out)
+	bufOut := bufio.NewWriterSize(out, 2*1024*1024)
+	zw := zip.NewWriter(bufOut)
+	copyBuf := make([]byte, 1024*1024)
+	written := make(map[string]bool)
 
-	for name, f := range ctx.Entries {
-		if f.FileInfo().IsDir() {
-			continue
+	writeOptimizedEntry := func(name string, f *zip.File) error {
+		if f.FileInfo().IsDir() || removedPaths[name] || written[name] {
+			return nil
 		}
 
-		if removedPaths[name] {
-			continue
+		targetName := name
+		if newPath, ok := renameMap[name]; ok {
+			targetName = newPath
+		}
+
+		if written[targetName] {
+			written[name] = true
+			return nil
+		}
+
+		canDirectCopy := false
+		if _, ok := processedBytes[name]; !ok {
+			if _, ok := renameMap[name]; !ok {
+				ext := strings.ToLower(filepath.Ext(name))
+				if name != ctx.OPFPath &&
+					ext != ".xhtml" && ext != ".html" && ext != ".htm" &&
+					ext != ".css" && ext != ".ncx" {
+					canDirectCopy = true
+				}
+			}
+		}
+
+		if canDirectCopy {
+			if err := copyZipEntry(zw, f, copyBuf); err != nil {
+				return err
+			}
+			written[name] = true
+			written[targetName] = true
+			return nil
 		}
 
 		var data []byte
 		var readErr error
-		targetName := name
 
-		if webpData, ok := convertedBytes[name]; ok {
-			data = webpData
-			if newPath, ok := renameMap[name]; ok {
-				targetName = newPath
-			}
+		if processedData, ok := processedBytes[name]; ok {
+			data = processedData
 		} else {
 			rc, err := f.Open()
 			if err != nil {
-				_ = zw.Close()
-				_ = out.Close()
-				_ = os.Remove(tmpPath)
-				return models.OptimizeResponse{}, err
+				return err
 			}
 			data, readErr = io.ReadAll(rc)
 			_ = rc.Close()
 			if readErr != nil {
-				_ = zw.Close()
-				_ = out.Close()
-				_ = os.Remove(tmpPath)
-				return models.OptimizeResponse{}, readErr
-			}
-
-			if req.CompressImages {
-				data = compressImage(name, data, req.ImageQuality)
+				return readErr
 			}
 		}
 
@@ -221,15 +285,34 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 			}
 		}
 
-		w, err := zw.Create(targetName)
+		method := uint16(zip.Deflate)
+		if targetName == "mimetype" {
+			method = zip.Store
+		}
+		header := &zip.FileHeader{Name: targetName, Method: method}
+		header.SetMode(0644)
+		w, err := zw.CreateHeader(header)
 		if err != nil {
+			return err
+		}
+		if _, err := w.Write(data); err != nil {
+			return err
+		}
+		written[name] = true
+		written[targetName] = true
+		return nil
+	}
+
+	if f := ctx.Entries["mimetype"]; f != nil {
+		if err := writeOptimizedEntry("mimetype", f); err != nil {
 			_ = zw.Close()
 			_ = out.Close()
 			_ = os.Remove(tmpPath)
 			return models.OptimizeResponse{}, err
 		}
-		_, err = w.Write(data)
-		if err != nil {
+	}
+	for _, f := range ctx.Reader.File {
+		if err := writeOptimizedEntry(f.Name, f); err != nil {
 			_ = zw.Close()
 			_ = out.Close()
 			_ = os.Remove(tmpPath)
@@ -242,12 +325,17 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 		_ = os.Remove(tmpPath)
 		return models.OptimizeResponse{}, err
 	}
-	_ = out.Close()
-
-	ctx.Close()
-
-	if err := os.Rename(tmpPath, ctx.FilePath); err != nil {
+	if err := bufOut.Flush(); err != nil {
+		_ = out.Close()
 		_ = os.Remove(tmpPath)
+		return models.OptimizeResponse{}, err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return models.OptimizeResponse{}, err
+	}
+
+	if err := replaceBookFileWithTemp(id, ctx, tmpPath); err != nil {
 		return models.OptimizeResponse{}, err
 	}
 
@@ -257,7 +345,7 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 		newSize = newInfo.Size()
 	}
 
-	var convertedList []string
+	convertedList := []string{}
 	for oldPath := range renameMap {
 		convertedList = append(convertedList, oldPath)
 	}
@@ -270,6 +358,85 @@ func (s *Service) Optimize(id string, req models.OptimizeRequest) (models.Optimi
 		RemovedFiles:    removedList,
 		ConvertedImages: convertedList,
 	}, nil
+}
+
+func (ctx *BookContext) optimizationReachablePaths() (map[string]bool, string) {
+	reachable := make(map[string]bool)
+	scanRoots := make(map[string]bool)
+
+	addReachable := func(path string) {
+		if strings.TrimSpace(path) == "" {
+			return
+		}
+		path = normalizeZipPath(path)
+		if path != "" && path != "." {
+			reachable[path] = true
+		}
+	}
+	addScanRoot := func(path string) {
+		if strings.TrimSpace(path) == "" {
+			return
+		}
+		path = normalizeZipPath(path)
+		if path != "" && path != "." {
+			reachable[path] = true
+			scanRoots[path] = true
+		}
+	}
+
+	addReachable("mimetype")
+	addReachable(ctx.OPFPath)
+	for _, f := range ctx.Reader.File {
+		if strings.HasPrefix(f.Name, "META-INF/") {
+			addReachable(f.Name)
+		}
+	}
+
+	for _, ref := range ctx.Spine {
+		if item, ok := ctx.ManifestByID[ref.IDRef]; ok {
+			addScanRoot(item.FullPath)
+		}
+	}
+	if coverID := ctx.coverID(); coverID != "" {
+		if item, ok := ctx.ManifestByID[coverID]; ok {
+			addReachable(item.FullPath)
+		}
+	}
+	if ctx.NCX != nil {
+		addReachable(ctx.NCX.FullPath)
+	}
+	for _, item := range ctx.Manifest {
+		if hasPropertyToken(item.Attrs["properties"], "nav") {
+			addScanRoot(item.FullPath)
+		}
+	}
+
+	if deps, err := ctx.collectDependencies(scanRoots); err == nil {
+		for dep := range deps {
+			addReachable(dep)
+		}
+	}
+
+	var content strings.Builder
+	for path := range reachable {
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext != ".xhtml" && ext != ".html" && ext != ".htm" && ext != ".css" && ext != ".ncx" {
+			continue
+		}
+		if text, err := ctx.readText(path); err == nil {
+			content.WriteString(text)
+			content.WriteByte('\n')
+		}
+	}
+	return reachable, content.String()
+}
+
+func zipBaseName(name string) string {
+	name = strings.TrimRight(strings.ReplaceAll(name, "\\", "/"), "/")
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		return name[idx+1:]
+	}
+	return name
 }
 
 func cleanAndRenameOPFManifest(opfContent string, removedPaths map[string]bool, renameMap map[string]string, opfDir string) string {
@@ -287,10 +454,7 @@ func cleanAndRenameOPFManifest(opfContent string, removedPaths map[string]bool, 
 		attrs := parseAttrs(raw)
 		href := attrs["href"]
 
-		fullPath := href
-		if opfDir != "" {
-			fullPath = opfDir + href
-		}
+		fullPath := resolveZipHref(opfDir, href)
 
 		if removedPaths[fullPath] {
 			continue

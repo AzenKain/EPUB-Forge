@@ -38,10 +38,20 @@ func (c *Controller) ListEpubs(w http.ResponseWriter, r *http.Request) {
 func (c *Controller) Epub(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/epubs/"), "/")
 	if len(parts) == 1 || (len(parts) == 2 && parts[1] == "") {
+		id, _ := url.PathUnescape(parts[0])
 		if r.Method == http.MethodDelete {
-			id, _ := url.PathUnescape(parts[0])
 			err := c.service.DeleteEpub(id)
 			utils.WriteJSON(w, map[string]any{"success": true}, err)
+			return
+		}
+		if r.Method == http.MethodPatch {
+			var req models.RenameEpubRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				utils.WriteError(w, err)
+				return
+			}
+			file, err := c.service.RenameEpub(id, req.Name)
+			utils.WriteJSON(w, file, err)
 			return
 		}
 	}
@@ -53,6 +63,18 @@ func (c *Controller) Epub(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case len(parts) == 2 && parts[1] == "analyze":
 		analysis, err := c.service.Analyze(id)
+		utils.WriteJSON(w, analysis, err)
+	case len(parts) == 2 && parts[1] == "undo":
+		if r.Method == http.MethodGet {
+			status, err := c.service.UndoStatus(id)
+			utils.WriteJSON(w, status, err)
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		analysis, err := c.service.Undo(id)
 		utils.WriteJSON(w, analysis, err)
 	case len(parts) == 2 && parts[1] == "fonts":
 		c.EmbedFont(id, w, r)
@@ -110,6 +132,36 @@ func (c *Controller) Epub(w http.ResponseWriter, r *http.Request) {
 			utils.WriteJSON(w, analysis, err)
 		} else {
 			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	case len(parts) == 3 && parts[1] == "gallery" && parts[2] == "download":
+		var req models.GalleryDownloadRequest
+		switch r.Method {
+		case http.MethodGet:
+			query := r.URL.Query()
+			req.Paths = query["path"]
+			req.All = query.Get("all") == "true" || query.Get("scope") == "all"
+		case http.MethodPost:
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				utils.WriteError(w, err)
+				return
+			}
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		headersSent := false
+		err := c.service.StreamGalleryDownload(id, req.Paths, req.All, w, func(info service.GalleryDownloadInfo) {
+			headersSent = true
+			fileName := strings.ReplaceAll(info.FileName, `"`, "")
+			w.Header().Set("Content-Type", info.ContentType)
+			w.Header().Set("Content-Disposition", `attachment; filename="`+fileName+`"`)
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Cache-Control", "no-store")
+		})
+		if err != nil && !headersSent {
+			utils.WriteError(w, err)
+			return
 		}
 	case len(parts) == 2 && parts[1] == "assets":
 		data, contentType, err := c.service.Asset(id, r.URL.Query().Get("path"))
@@ -729,4 +781,59 @@ func (c *Controller) RestartApp(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
 		c.service.RestartApp()
 	}()
+}
+
+func (c *Controller) StoreExtensions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	items, err := c.service.FetchStoreExtensions()
+	utils.WriteJSON(w, items, err)
+}
+
+func (c *Controller) InstallExtension(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		DownloadURL string `json:"downloadUrl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	if req.DownloadURL == "" {
+		http.Error(w, "downloadUrl is required", http.StatusBadRequest)
+		return
+	}
+
+	info, err := c.service.InstallStoreExtension(req.DownloadURL)
+	utils.WriteJSON(w, info, err)
+}
+
+func (c *Controller) UpdateExtension(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.WriteError(w, err)
+		return
+	}
+
+	if req.ID == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+
+	info, err := c.service.UpdateExtension(req.ID)
+	utils.WriteJSON(w, info, err)
 }

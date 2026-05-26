@@ -2,7 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/md5"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +15,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"epubforge/internal/models"
@@ -37,6 +43,26 @@ type ExtensionInfo struct {
 	Name        string           `json:"name"`
 	Description string           `json:"description"`
 	Inputs      []ExtensionInput `json:"inputs"`
+	IsOfficial  bool             `json:"isOfficial"`
+	Md5         string           `json:"md5"`
+	HasUpdate   bool             `json:"hasUpdate"`
+}
+
+type StoreExtensionInfo struct {
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	Inputs      []ExtensionInput `json:"inputs"`
+	Md5         string           `json:"md5"`
+	DownloadURL string           `json:"downloadUrl"`
+	Size        int64            `json:"size"`
+	Installed   bool             `json:"installed"`
+	HasUpdate   bool             `json:"hasUpdate"`
+}
+
+func computeMD5(data []byte) string {
+	hash := md5.Sum(data)
+	return hex.EncodeToString(hash[:])
 }
 
 type JSSession struct {
@@ -50,6 +76,12 @@ type JSSessionResponse struct {
 	Status  int               `json:"status"`
 	Body    string            `json:"body"`
 	Headers map[string]string `json:"headers"`
+}
+
+type extensionChoiceOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
 }
 
 func (s *Service) getBrowser() (*rod.Browser, error) {
@@ -79,6 +111,8 @@ func (s *Service) Close() {
 	s.activeRunsMu.Lock()
 	defer s.activeRunsMu.Unlock()
 
+	s.FlushAllZipWrites()
+
 	if s.browser != nil {
 		_ = s.browser.Close()
 		s.browser = nil
@@ -97,8 +131,9 @@ func (s *Service) NewJSSession(logWriter io.Writer, runID string) (*JSSession, e
 
 	page := stealth.MustPage(browser)
 	_ = page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{
-		Width:  1024,
-		Height: 768,
+		Width:             1024,
+		Height:            768,
+		DeviceScaleFactor: 1,
 	})
 
 	s.activeRunsMu.Lock()
@@ -145,6 +180,12 @@ func (s *JSSession) Get(urlStr string, headers map[string]string) (*JSSessionRes
 		return nil, fmt.Errorf("lỗi điều hướng: %w", err)
 	}
 
+	loadPage := s.page.Timeout(45 * time.Second)
+	if err := loadPage.WaitLoad(); err != nil && s.logWriter != nil {
+		fmt.Fprintf(s.logWriter, "[*] Không chờ được sự kiện load hoàn tất, tiếp tục đọc DOM hiện tại: %v\n", err)
+	}
+	loadPage.CancelTimeout()
+
 	_ = s.page.WaitDOMStable(1000*time.Millisecond, 0.5)
 
 	s.handleCloudflareChallenge()
@@ -158,7 +199,17 @@ func (s *JSSession) Get(urlStr string, headers map[string]string) (*JSSessionRes
 }
 
 func (s *JSSession) Post(urlStr string, payload any, headers map[string]string) (*JSSessionResponse, error) {
-	return s.fetchInPage(urlStr, "POST", headers, payload)
+	resp, err := s.fetchInPage(urlStr, "POST", headers, payload)
+	if err == nil {
+		return resp, nil
+	}
+	if !isFormURLEncoded(headers) || !strings.Contains(err.Error(), "Failed to fetch") {
+		return nil, err
+	}
+	if s.logWriter != nil {
+		fmt.Fprintln(s.logWriter, "[*] POST bằng fetch bị trình duyệt chặn, chuyển sang submit form...")
+	}
+	return s.submitFormInPage(urlStr, payload)
 }
 
 func (s *JSSession) HasCookie(cookieName string) bool {
@@ -172,6 +223,87 @@ func (s *JSSession) HasCookie(cookieName string) bool {
 		}
 	}
 	return false
+}
+
+func isFormURLEncoded(headers map[string]string) bool {
+	for k, v := range headers {
+		if strings.ToLower(k) == "content-type" && strings.Contains(strings.ToLower(v), "application/x-www-form-urlencoded") {
+			return true
+		}
+	}
+	return false
+}
+
+func payloadToStringMap(payload any) (map[string]string, bool) {
+	values := make(map[string]string)
+	switch m := payload.(type) {
+	case map[string]any:
+		for k, v := range m {
+			values[k] = fmt.Sprintf("%v", v)
+		}
+	case map[string]string:
+		for k, v := range m {
+			values[k] = v
+		}
+	default:
+		return nil, false
+	}
+	return values, true
+}
+
+func (s *JSSession) submitFormInPage(urlStr string, payload any) (*JSSessionResponse, error) {
+	fields, ok := payloadToStringMap(payload)
+	if !ok {
+		return nil, errors.New("không thể submit form: payload không phải object")
+	}
+	fieldsJSON, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+
+	formScript := `
+		(url, fieldsJson) => {
+			const fields = JSON.parse(fieldsJson);
+			const form = document.createElement("form");
+			form.method = "POST";
+			form.action = url;
+			form.style.display = "none";
+			for (const [key, value] of Object.entries(fields)) {
+				const input = document.createElement("input");
+				input.type = "hidden";
+				input.name = key;
+				input.value = String(value);
+				form.appendChild(input);
+			}
+			document.body.appendChild(form);
+			form.submit();
+			return true;
+		}
+	`
+
+	navPage := s.page.Timeout(45 * time.Second)
+	defer navPage.CancelTimeout()
+	wait := navPage.WaitNavigation(proto.PageLifecycleEventNameLoad)
+
+	if _, err := navPage.Evaluate(rod.Eval(formScript, urlStr, string(fieldsJSON))); err != nil {
+		return nil, fmt.Errorf("lỗi submit form trong trang: %w", err)
+	}
+	if err := rod.Try(func() { wait() }); err != nil && s.logWriter != nil {
+		fmt.Fprintf(s.logWriter, "[*] Không bắt được sự kiện điều hướng sau submit form, tiếp tục đọc trang hiện tại: %v\n", err)
+	}
+
+	_ = s.page.WaitDOMStable(1000*time.Millisecond, 0.5)
+	s.handleCloudflareChallenge()
+
+	htmlBody, err := s.page.HTML()
+	if err != nil {
+		return nil, fmt.Errorf("lỗi đọc HTML sau submit form: %w", err)
+	}
+	return &JSSessionResponse{
+		Status:  200,
+		Body:    htmlBody,
+		Headers: make(map[string]string),
+	}, nil
 }
 
 func (s *JSSession) GetBinaryBase64(urlStr string, headers map[string]string) (string, error) {
@@ -202,11 +334,35 @@ func (s *JSSession) GetBinaryBase64(urlStr string, headers map[string]string) (s
 
 	resp, err := client.Do(req)
 	if err != nil {
+		if shouldRetryJukazaImageTLS(req.URL, err) {
+			if s.logWriter != nil {
+				fmt.Fprintf(s.logWriter, "  [*] Host img.jukaza.site đang dùng certificate của jukaza.site, thử lại với SNI jukaza.site...\n")
+			}
+			retryReq := req.Clone(req.Context())
+			retryClient := &http.Client{
+				Timeout: 30 * time.Second,
+				Transport: &http.Transport{
+					Proxy:           http.ProxyFromEnvironment,
+					TLSClientConfig: &tls.Config{ServerName: "jukaza.site"},
+				},
+			}
+			resp, err = retryClient.Do(retryReq)
+			if err == nil {
+				goto readResponse
+			}
+		}
+		if browserBase64, browserErr := s.getBinaryBase64InPage(urlStr, headers); browserErr == nil && browserBase64 != "" {
+			return browserBase64, nil
+		}
 		return "", fmt.Errorf("lỗi tải ảnh nhị phân: %w", err)
 	}
+readResponse:
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
+		if browserBase64, browserErr := s.getBinaryBase64InPage(urlStr, headers); browserErr == nil && browserBase64 != "" {
+			return browserBase64, nil
+		}
 		return "", fmt.Errorf("lỗi tải ảnh nhị phân: HTTP %d", resp.StatusCode)
 	}
 
@@ -216,6 +372,46 @@ func (s *JSSession) GetBinaryBase64(urlStr string, headers map[string]string) (s
 	}
 
 	return base64.StdEncoding.EncodeToString(body), nil
+}
+
+func (s *JSSession) getBinaryBase64InPage(urlStr string, headers map[string]string) (string, error) {
+	if s == nil || s.page == nil {
+		return "", errors.New("không có browser session để tải ảnh")
+	}
+	fetchScript := `
+		async (url, headersJson) => {
+			const headers = JSON.parse(headersJson || "{}");
+			const resp = await fetch(url, { headers });
+			if (!resp.ok) {
+				throw new Error("HTTP " + resp.status);
+			}
+			const bytes = new Uint8Array(await resp.arrayBuffer());
+			let binary = "";
+			const chunkSize = 0x8000;
+			for (let i = 0; i < bytes.length; i += chunkSize) {
+				binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+			}
+			return btoa(binary);
+		}
+	`
+	headersBytes, _ := json.Marshal(headers)
+	res, err := s.page.Evaluate(rod.Eval(fetchScript, urlStr, string(headersBytes)).ByPromise())
+	if err != nil {
+		return "", fmt.Errorf("lỗi tải ảnh bằng browser fetch: %w", err)
+	}
+	var base64Str string
+	if err := res.Value.Unmarshal(&base64Str); err != nil {
+		return "", fmt.Errorf("lỗi đọc dữ liệu ảnh từ browser fetch: %w", err)
+	}
+	return base64Str, nil
+}
+
+func shouldRetryJukazaImageTLS(parsedURL *url.URL, err error) bool {
+	if parsedURL == nil || strings.ToLower(parsedURL.Hostname()) != "img.jukaza.site" {
+		return false
+	}
+	var hostnameErr x509.HostnameError
+	return errors.As(err, &hostnameErr)
 }
 
 func (s *JSSession) isCloudflareActive() bool {
@@ -232,10 +428,21 @@ func (s *JSSession) isCloudflareActive() bool {
 	if err != nil {
 		return false
 	}
+	if isVisibleLoginFormHTML(html) {
+		return false
+	}
 	if strings.Contains(html, "cf-challenge") || strings.Contains(html, "challenge-platform") || strings.Contains(html, "cf-turnstile") {
 		return true
 	}
 	return false
+}
+
+func isVisibleLoginFormHTML(html string) bool {
+	lower := strings.ToLower(html)
+	return strings.Contains(lower, "<form") &&
+		strings.Contains(lower, "/login") &&
+		strings.Contains(lower, `name="password"`) &&
+		(strings.Contains(lower, `name="name"`) || strings.Contains(lower, `name="email"`) || strings.Contains(lower, `autocomplete="username"`))
 }
 
 func (s *JSSession) handleCloudflareChallenge() {
@@ -277,7 +484,7 @@ func (s *JSSession) handleCloudflareChallenge() {
 
 func (s *JSSession) streamPageScreenshot() {
 	quality := int(75)
-	imgBytes, err := s.page.Screenshot(true, &proto.PageCaptureScreenshot{
+	imgBytes, err := s.page.Screenshot(false, &proto.PageCaptureScreenshot{
 		Format:  proto.PageCaptureScreenshotFormatJpeg,
 		Quality: &quality,
 	})
@@ -380,6 +587,8 @@ func (s *Service) ListExtensions() ([]ExtensionInfo, error) {
 		return nil, err
 	}
 
+	storeMap := s.getStoreMd5Map()
+
 	var list []ExtensionInfo
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".js") {
@@ -396,6 +605,16 @@ func (s *Service) ListExtensions() ([]ExtensionInfo, error) {
 		if err != nil {
 			continue
 		}
+
+		info.Md5 = computeMD5(jsBytes)
+
+		if remoteMd5, ok := storeMap[info.ID]; ok {
+			info.IsOfficial = true
+			if remoteMd5 != "" && remoteMd5 != info.Md5 {
+				info.HasUpdate = true
+			}
+		}
+
 		list = append(list, info)
 	}
 
@@ -430,6 +649,357 @@ func (s *Service) parseExtensionMeta(jsCode string) (ExtensionInfo, error) {
 		return ExtensionInfo{}, errors.New("extension metadata missing id")
 	}
 	return info, nil
+}
+
+const storeAPIURL = "https://api.github.com/repos/AzenKain/EPUB-Forge/contents/extensions"
+
+type githubContentEntry struct {
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Size        int64  `json:"size"`
+	DownloadURL string `json:"download_url"`
+}
+
+type storeCacheEntry struct {
+	items     []StoreExtensionInfo
+	md5Map    map[string]string
+	fetchedAt time.Time
+}
+
+var (
+	storeCache   *storeCacheEntry
+	storeCacheMu sync.Mutex
+)
+
+const storeCacheTTL = 5 * time.Minute
+
+func (s *Service) getStoreMd5Map() map[string]string {
+	storeCacheMu.Lock()
+	defer storeCacheMu.Unlock()
+	if storeCache != nil && time.Since(storeCache.fetchedAt) < storeCacheTTL {
+		return storeCache.md5Map
+	}
+	return make(map[string]string)
+}
+
+func (s *Service) FetchStoreExtensions() ([]StoreExtensionInfo, error) {
+	storeCacheMu.Lock()
+	if storeCache != nil && time.Since(storeCache.fetchedAt) < storeCacheTTL {
+		cached := storeCache.items
+		storeCacheMu.Unlock()
+		return s.tagStoreWithLocalState(cached), nil
+	}
+	storeCacheMu.Unlock()
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequest("GET", storeAPIURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("không thể tạo request tới GitHub: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("User-Agent", "EPUBForge-ExtensionStore")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("không thể kết nối tới GitHub: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("GitHub API trả về lỗi: HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("lỗi đọc phản hồi từ GitHub: %w", err)
+	}
+
+	var entries []githubContentEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, fmt.Errorf("lỗi phân giải danh sách extension từ GitHub: %w", err)
+	}
+
+	var storeItems []StoreExtensionInfo
+	md5Map := make(map[string]string)
+
+	for _, entry := range entries {
+		if !strings.HasSuffix(strings.ToLower(entry.Name), ".js") || entry.DownloadURL == "" {
+			continue
+		}
+
+		jsBytes, err := s.downloadRawFile(entry.DownloadURL)
+		if err != nil {
+			continue
+		}
+
+		info, err := s.parseExtensionMeta(string(jsBytes))
+		if err != nil {
+			continue
+		}
+
+		fileMd5 := computeMD5(jsBytes)
+		md5Map[info.ID] = fileMd5
+
+		storeItems = append(storeItems, StoreExtensionInfo{
+			ID:          info.ID,
+			Name:        info.Name,
+			Description: info.Description,
+			Inputs:      info.Inputs,
+			Md5:         fileMd5,
+			DownloadURL: entry.DownloadURL,
+			Size:        entry.Size,
+		})
+	}
+
+	storeCacheMu.Lock()
+	storeCache = &storeCacheEntry{
+		items:     storeItems,
+		md5Map:    md5Map,
+		fetchedAt: time.Now(),
+	}
+	storeCacheMu.Unlock()
+
+	return s.tagStoreWithLocalState(storeItems), nil
+}
+
+func (s *Service) tagStoreWithLocalState(items []StoreExtensionInfo) []StoreExtensionInfo {
+	dir := s.extensionsDir()
+	localMd5s := make(map[string]string)
+
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".js") {
+				continue
+			}
+			filePath := filepath.Join(dir, entry.Name())
+			jsBytes, err := os.ReadFile(filePath)
+			if err != nil {
+				continue
+			}
+			info, err := s.parseExtensionMeta(string(jsBytes))
+			if err != nil {
+				continue
+			}
+			localMd5s[info.ID] = computeMD5(jsBytes)
+		}
+	}
+
+	result := make([]StoreExtensionInfo, len(items))
+	for i, item := range items {
+		result[i] = item
+		if localMd5, ok := localMd5s[item.ID]; ok {
+			result[i].Installed = true
+			if localMd5 != item.Md5 {
+				result[i].HasUpdate = true
+			}
+		}
+	}
+	return result
+}
+
+func (s *Service) downloadRawFile(rawURL string) ([]byte, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "EPUBForge-ExtensionStore")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+func (s *Service) InstallStoreExtension(downloadURL string) (ExtensionInfo, error) {
+	jsBytes, err := s.downloadRawFile(downloadURL)
+	if err != nil {
+		return ExtensionInfo{}, fmt.Errorf("không thể tải extension từ store: %w", err)
+	}
+	return s.AddExtension(jsBytes)
+}
+
+func (s *Service) UpdateExtension(id string) (ExtensionInfo, error) {
+	storeItems, err := s.FetchStoreExtensions()
+	if err != nil {
+		return ExtensionInfo{}, fmt.Errorf("không thể truy vấn store: %w", err)
+	}
+
+	var downloadURL string
+	for _, item := range storeItems {
+		if item.ID == id {
+			downloadURL = item.DownloadURL
+			break
+		}
+	}
+
+	if downloadURL == "" {
+		return ExtensionInfo{}, fmt.Errorf("extension %q không tìm thấy trên store", id)
+	}
+
+	jsBytes, err := s.downloadRawFile(downloadURL)
+	if err != nil {
+		return ExtensionInfo{}, fmt.Errorf("không thể tải bản cập nhật: %w", err)
+	}
+
+	storeCacheMu.Lock()
+	storeCache = nil
+	storeCacheMu.Unlock()
+
+	return s.AddExtension(jsBytes)
+}
+
+func formatJSPanic(vm *goja.Runtime, recovered any) error {
+	switch v := recovered.(type) {
+	case *goja.Exception:
+		message := jsExceptionMessage(vm, v)
+		if message != "" {
+			return errors.New(message)
+		}
+		return errors.New(v.String())
+	case error:
+		if errors.Is(v, context.Canceled) {
+			return context.Canceled
+		}
+		return fmt.Errorf("JS execution panic: %v", v)
+	default:
+		return fmt.Errorf("JS execution panic: %v", v)
+	}
+}
+
+func jsExceptionMessage(vm *goja.Runtime, ex *goja.Exception) string {
+	if ex == nil {
+		return ""
+	}
+	val := ex.Value()
+	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) {
+		return strings.TrimSpace(ex.String())
+	}
+
+	obj := val.ToObject(vm)
+	if obj != nil {
+		messageVal := obj.Get("message")
+		if messageVal != nil && !goja.IsUndefined(messageVal) && !goja.IsNull(messageVal) {
+			if message := strings.TrimSpace(messageVal.String()); message != "" {
+				return message
+			}
+		}
+	}
+
+	text := strings.TrimSpace(val.String())
+	text = strings.TrimPrefix(text, "Error: ")
+	if text != "" {
+		return text
+	}
+	return strings.TrimSpace(ex.String())
+}
+
+func (s *Service) waitForExtensionChoice(ctx context.Context, run *ActiveRun, logWriter io.Writer, prompt string, rawOptions any, multiple bool) ([]string, error) {
+	options := normalizeExtensionChoiceOptions(rawOptions)
+	if len(options) == 0 {
+		return nil, errors.New("choice prompt không có lựa chọn nào")
+	}
+
+	choiceID := "choice_" + randomID()
+	ch := make(chan []string, 1)
+
+	run.ChoiceMu.Lock()
+	run.ChoiceID = choiceID
+	run.ChoiceCh = ch
+	run.ChoiceMu.Unlock()
+
+	defer func() {
+		run.ChoiceMu.Lock()
+		if run.ChoiceID == choiceID {
+			run.ChoiceID = ""
+			run.ChoiceCh = nil
+		}
+		run.ChoiceMu.Unlock()
+	}()
+
+	msg := map[string]any{
+		"type":     "choice_required",
+		"runId":    run.SessionID,
+		"choiceId": choiceID,
+		"prompt":   prompt,
+		"multiple": multiple,
+		"options":  options,
+	}
+	msgBytes, _ := json.Marshal(msg)
+	fmt.Fprintln(logWriter, string(msgBytes))
+
+	select {
+	case selected := <-ch:
+		if !multiple && len(selected) > 1 {
+			selected = selected[:1]
+		}
+		return selected, nil
+	case <-ctx.Done():
+		return nil, context.Canceled
+	}
+}
+
+func normalizeExtensionChoiceOptions(rawOptions any) []extensionChoiceOption {
+	var options []extensionChoiceOption
+	switch items := rawOptions.(type) {
+	case []any:
+		for i, item := range items {
+			options = appendChoiceOption(options, i, item)
+		}
+	case []map[string]any:
+		for i, item := range items {
+			options = appendChoiceOption(options, i, item)
+		}
+	case []extensionChoiceOption:
+		return items
+	}
+	return options
+}
+
+func appendChoiceOption(options []extensionChoiceOption, index int, item any) []extensionChoiceOption {
+	switch v := item.(type) {
+	case map[string]any:
+		id := strings.TrimSpace(fmt.Sprintf("%v", v["id"]))
+		label := strings.TrimSpace(fmt.Sprintf("%v", v["label"]))
+		description := strings.TrimSpace(fmt.Sprintf("%v", v["description"]))
+		if id == "" || id == "<nil>" {
+			id = strconv.Itoa(index + 1)
+		}
+		if label == "" || label == "<nil>" {
+			label = id
+		}
+		if description == "<nil>" {
+			description = ""
+		}
+		return append(options, extensionChoiceOption{ID: id, Label: label, Description: description})
+	case map[string]string:
+		id := strings.TrimSpace(v["id"])
+		label := strings.TrimSpace(v["label"])
+		description := strings.TrimSpace(v["description"])
+		if id == "" {
+			id = strconv.Itoa(index + 1)
+		}
+		if label == "" {
+			label = id
+		}
+		return append(options, extensionChoiceOption{ID: id, Label: label, Description: description})
+	case string:
+		id := strconv.Itoa(index + 1)
+		return append(options, extensionChoiceOption{ID: id, Label: v})
+	default:
+		label := strings.TrimSpace(fmt.Sprintf("%v", v))
+		if label == "" || label == "<nil>" {
+			label = strconv.Itoa(index + 1)
+		}
+		return append(options, extensionChoiceOption{ID: strconv.Itoa(index + 1), Label: label})
+	}
 }
 
 func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string]any, logWriter io.Writer) ([]string, error) {
@@ -498,6 +1068,13 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 		"sleep": func(ms int64) {
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		},
+		"choose": func(prompt string, options any, multiple bool) []string {
+			selected, err := s.waitForExtensionChoice(ctx, activeRun, logWriter, prompt, options, multiple)
+			if err != nil {
+				panic(err)
+			}
+			return selected
+		},
 		"base64ToBytes": func(s string) ([]byte, error) {
 			return base64.StdEncoding.DecodeString(s)
 		},
@@ -541,11 +1118,7 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				if err, ok := r.(error); ok && errors.Is(err, context.Canceled) {
-					errChan <- context.Canceled
-				} else {
-					errChan <- fmt.Errorf("JS execution panic: %v", r)
-				}
+				errChan <- formatJSPanic(vm, r)
 			}
 		}()
 		result = runFunc(inputs)
@@ -628,6 +1201,7 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 		if err != nil {
 			return nil, fmt.Errorf("lỗi biên dịch EPUB: %w", err)
 		}
+		fmt.Fprintf(logWriter, "[*] Đã tự kiểm tra và sửa EPUB trước khi lưu: %s\n", outputName)
 		createdBooks = append(createdBooks, outputName)
 	}
 
@@ -669,6 +1243,10 @@ func (s *Service) InteractExtension(runID string, action string, x, y float64, t
 		return "", fmt.Errorf("không tìm thấy session chạy extension tương ứng: %s", runID)
 	}
 
+	if action == "choice" {
+		return "", answerExtensionChoice(run, text)
+	}
+
 	if run.Page == nil {
 		return "", fmt.Errorf("trình duyệt chưa được tải sẵn cho session này")
 	}
@@ -698,7 +1276,7 @@ func (s *Service) InteractExtension(runID string, action string, x, y float64, t
 	_ = run.Page.WaitDOMStable(500*time.Millisecond, 0.5)
 
 	quality := int(75)
-	imgBytes, err := run.Page.Screenshot(true, &proto.PageCaptureScreenshot{
+	imgBytes, err := run.Page.Screenshot(false, &proto.PageCaptureScreenshot{
 		Format:  proto.PageCaptureScreenshotFormatJpeg,
 		Quality: &quality,
 	})
@@ -707,4 +1285,33 @@ func (s *Service) InteractExtension(runID string, action string, x, y float64, t
 	}
 
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(imgBytes), nil
+}
+
+func answerExtensionChoice(run *ActiveRun, text string) error {
+	var selected []string
+	if err := json.Unmarshal([]byte(text), &selected); err != nil {
+		for _, part := range strings.Split(text, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				selected = append(selected, part)
+			}
+		}
+	}
+	if len(selected) == 0 {
+		return errors.New("chưa chọn lựa chọn nào")
+	}
+
+	run.ChoiceMu.Lock()
+	ch := run.ChoiceCh
+	run.ChoiceMu.Unlock()
+	if ch == nil {
+		return errors.New("không có yêu cầu chọn nào đang chờ")
+	}
+
+	select {
+	case ch <- selected:
+		return nil
+	default:
+		return errors.New("yêu cầu chọn đã được xử lý")
+	}
 }

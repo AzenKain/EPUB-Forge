@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { X, Sparkles, AlertTriangle, CheckCircle, Trash2, ArrowDown, Image, Type, Zap, FileText } from "lucide-react";
 
 type Props = {
@@ -91,6 +91,13 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
   const [normalizeTones, setNormalizeTones] = useState(true);
   const [fixSpacing, setFixSpacing] = useState(true);
 
+  useEffect(() => {
+    if (!open) return;
+    setLoading(false);
+    setError("");
+    setResult(null);
+  }, [open, bookId]);
+
   if (!open) return null;
 
   const formatSize = (bytes: number) => {
@@ -133,8 +140,14 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
         const errData = await res.json();
         throw new Error(errData.error || "Lỗi khi tối ưu hóa sách");
       }
-      const data = await res.json();
-      setResult(data);
+      const data = (await res.json()) as Partial<OptimizeResult>;
+      setResult({
+        success: Boolean(data.success),
+        originalSize: Number(data.originalSize) || 0,
+        newSize: Number(data.newSize) || 0,
+        removedFiles: Array.isArray(data.removedFiles) ? data.removedFiles : [],
+        convertedImages: Array.isArray(data.convertedImages) ? data.convertedImages : []
+      });
       onSuccess();
     } catch (err: any) {
       setError(err.message || "Đã xảy ra lỗi không xác định.");
@@ -143,8 +156,20 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
     }
   };
 
+  const handleClose = () => {
+    setLoading(false);
+    setError("");
+    setResult(null);
+    onClose();
+  };
+
+  const handleOptimizeAgain = () => {
+    setError("");
+    setResult(null);
+  };
+
   return (
-    <div className="modalBackdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modalBackdrop" role="presentation" onMouseDown={handleClose}>
       <section
         className="metadataModal"
         role="dialog"
@@ -172,7 +197,7 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
               {bookTitle}
             </p>
           </div>
-          <button className="iconButton" onClick={onClose} title="Đóng">
+          <button className="iconButton" onClick={handleClose} title="Đóng">
             <X size={18} />
           </button>
         </header>
@@ -569,29 +594,68 @@ export function OptimizeModal({ open, bookId, bookTitle, onClose, onSuccess }: P
                   </div>
                 </div>
               )}
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="smallButton"
+                  onClick={handleOptimizeAgain}
+                  style={{
+                    padding: "8px 14px",
+                    fontSize: "13px",
+                    fontWeight: "600",
+                    borderRadius: "6px",
+                    border: "1px solid #c9c6bd",
+                    background: "#fff",
+                    color: "#544f45",
+                    cursor: "pointer"
+                  }}
+                >
+                  Tối ưu tiếp
+                </button>
+                <button
+                  type="button"
+                  className="smallButton strong"
+                  onClick={handleClose}
+                  style={{
+                    padding: "8px 14px",
+                    fontSize: "13px",
+                    fontWeight: "700",
+                    borderRadius: "6px",
+                    border: "1px solid #2f7d69",
+                    background: "#2f7d69",
+                    color: "#fff",
+                    cursor: "pointer"
+                  }}
+                >
+                  Đóng
+                </button>
+              </div>
             </div>
           )}
         </div>
 
-        <footer className="modalFooter" style={{ padding: "12px 20px", borderTop: "1px solid #e6dfd3", background: "#f3eedf", display: "flex", justifyContent: "flex-end" }}>
-          <button
-            type="button"
-            className="smallButton"
-            onClick={onClose}
-            style={{
-              padding: "8px 16px",
-              fontSize: "13px",
-              fontWeight: "500",
-              cursor: "pointer",
-              borderRadius: "6px",
-              border: "1px solid #c9c6bd",
-              background: "#fff",
-              color: "#544f45"
-            }}
-          >
-            {result ? "Đóng" : "Hủy"}
-          </button>
-        </footer>
+        {!result && (
+          <footer className="modalFooter" style={{ padding: "12px 20px", borderTop: "1px solid #e6dfd3", background: "#f3eedf", display: "flex", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="smallButton"
+              onClick={handleClose}
+              style={{
+                padding: "8px 16px",
+                fontSize: "13px",
+                fontWeight: "500",
+                cursor: "pointer",
+                borderRadius: "6px",
+                border: "1px solid #c9c6bd",
+                background: "#fff",
+                color: "#544f45"
+              }}
+            >
+              Hủy
+            </button>
+          </footer>
+        )}
       </section>
     </div>
   );

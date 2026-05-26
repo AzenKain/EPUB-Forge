@@ -2,6 +2,7 @@ package service
 
 import (
 	"archive/zip"
+	"bufio"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 type BookContext struct {
@@ -34,6 +37,7 @@ type BookContext struct {
 	NCX            *ManifestItem
 	TOC            []TocPoint
 	Detected       []DetectedVolume
+	isCached       bool
 }
 
 type ManifestItem struct {
@@ -58,6 +62,100 @@ type TocPoint struct {
 	FullPath string
 }
 
+type bookCacheKey struct {
+	path           string
+	size           int64
+	modTime        int64
+	overlayVersion int64
+}
+
+type bookCacheValue struct {
+	OPFPath  string
+	OPFDir   string
+	OPFXML   string
+	Manifest []ManifestItem
+	Spine    []SpineRef
+	Chapters []Chapter
+	Title    string
+	Creator  string
+	Metadata BookMetadata
+	NCX      *ManifestItem
+	TOC      []TocPoint
+	Detected []DetectedVolume
+}
+
+type titleCacheKey struct {
+	crc  uint32
+	size uint64
+}
+
+var (
+	bookCache                = make(map[bookCacheKey]bookCacheValue)
+	bookCacheMu              sync.RWMutex
+	titleCache               = make(map[titleCacheKey]string)
+	titleCacheMu             sync.RWMutex
+	overlayVersions          = make(map[string]int64)
+	overlayStructureVersions = make(map[string]int64)
+	overlayVersionsMu        sync.RWMutex
+
+	zipReaderCacheMu sync.Mutex
+	zipReaderCache   = make(map[string]zipReaderCacheVal)
+)
+
+type zipReaderCacheVal struct {
+	reader  *zip.ReadCloser
+	entries map[string]*zip.File
+	size    int64
+	modTime int64
+}
+
+func closeZipReaderForBook(id string, reader *zip.ReadCloser) {
+	closedProvidedReader := false
+
+	zipReaderCacheMu.Lock()
+	if cVal, ok := zipReaderCache[id]; ok {
+		if cVal.reader != nil {
+			_ = cVal.reader.Close()
+			if reader != nil && cVal.reader == reader {
+				closedProvidedReader = true
+			}
+		}
+		delete(zipReaderCache, id)
+	}
+	zipReaderCacheMu.Unlock()
+
+	if reader != nil && !closedProvidedReader {
+		_ = reader.Close()
+	}
+}
+
+func invalidateBookCacheForPath(filePath string) {
+	bookCacheMu.Lock()
+	defer bookCacheMu.Unlock()
+	for k := range bookCache {
+		if k.path == filePath {
+			delete(bookCache, k)
+		}
+	}
+}
+
+func replaceBookFileWithTemp(id string, ctx *BookContext, tmpPath string) error {
+	filePath := ctx.FilePath
+	closeZipReaderForBook(id, ctx.Reader)
+	ctx.Reader = nil
+	invalidateBookCacheForPath(filePath)
+
+	if err := removeFileWithRetry(filePath); err != nil && !os.IsNotExist(err) {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := renameFileWithRetry(tmpPath, filePath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 func loadBook(id string) (*BookContext, error) {
 	name, err := fromID(id)
 	if err != nil {
@@ -68,31 +166,133 @@ func loadBook(id string) (*BookContext, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	zipReaderCacheMu.Lock()
+	cVal, found := zipReaderCache[id]
+	if found && cVal.size == info.Size() && cVal.modTime == info.ModTime().UnixNano() {
+		ctx := &BookContext{
+			ID: id, FilePath: filePath, FileName: name, Size: info.Size(),
+			Reader: cVal.reader, Entries: cVal.entries, isCached: true,
+			ManifestByID: map[string]ManifestItem{}, ManifestByPath: map[string]ManifestItem{},
+		}
+		zipReaderCacheMu.Unlock()
+		if err := ctx.parse(); err != nil {
+			return nil, err
+		}
+		checkAndRecoverOverlay(id, filePath)
+		return ctx, nil
+	}
+	zipReaderCacheMu.Unlock()
+
 	reader, err := zip.OpenReader(filePath)
 	if err != nil {
 		return nil, err
 	}
-	ctx := &BookContext{
-		ID: id, FilePath: filePath, FileName: name, Size: info.Size(), Reader: reader,
-		Entries: map[string]*zip.File{}, ManifestByID: map[string]ManifestItem{}, ManifestByPath: map[string]ManifestItem{},
-	}
+
+	entries := make(map[string]*zip.File)
 	for _, f := range reader.File {
-		ctx.Entries[f.Name] = f
+		entries[f.Name] = f
+	}
+
+	zipReaderCacheMu.Lock()
+	if oldVal, ok := zipReaderCache[id]; ok {
+		_ = oldVal.reader.Close()
+	}
+	zipReaderCache[id] = zipReaderCacheVal{
+		reader:  reader,
+		entries: entries,
+		size:    info.Size(),
+		modTime: info.ModTime().UnixNano(),
+	}
+	zipReaderCacheMu.Unlock()
+
+	ctx := &BookContext{
+		ID: id, FilePath: filePath, FileName: name, Size: info.Size(),
+		Reader: reader, Entries: entries, isCached: true,
+		ManifestByID: map[string]ManifestItem{}, ManifestByPath: map[string]ManifestItem{},
 	}
 	if err := ctx.parse(); err != nil {
-		_ = reader.Close()
 		return nil, err
 	}
+	checkAndRecoverOverlay(id, filePath)
 	return ctx, nil
 }
 
 func (ctx *BookContext) Close() {
-	if ctx.Reader != nil {
+	if ctx.Reader != nil && !ctx.isCached {
 		_ = ctx.Reader.Close()
 	}
 }
 
+func (ctx *BookContext) getOverlayDir() string {
+	return filepath.Join(editDir, ".overlay", ctx.ID)
+}
+
+func (ctx *BookContext) isDeletedInOverlay(name string) bool {
+	deletedFile := filepath.Join(ctx.getOverlayDir(), ".deleted")
+	data, err := os.ReadFile(deletedFile)
+	if err != nil {
+		return false
+	}
+	normalizedName := normalizeZipPath(name)
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if normalizeZipPath(strings.TrimSpace(line)) == normalizedName {
+			return true
+		}
+	}
+	return false
+}
+
 func (ctx *BookContext) parse() error {
+	info, err := os.Stat(ctx.FilePath)
+	if err != nil {
+		return err
+	}
+
+	overlayVersionsMu.RLock()
+	overlayVer := overlayStructureVersions[ctx.ID]
+	overlayVersionsMu.RUnlock()
+
+	key := bookCacheKey{
+		path:           ctx.FilePath,
+		size:           info.Size(),
+		modTime:        info.ModTime().UnixNano(),
+		overlayVersion: overlayVer,
+	}
+
+	bookCacheMu.RLock()
+	val, found := bookCache[key]
+	bookCacheMu.RUnlock()
+
+	if found {
+		ctx.OPFPath = val.OPFPath
+		ctx.OPFDir = val.OPFDir
+		ctx.OPFXML = val.OPFXML
+		ctx.Manifest = val.Manifest
+		ctx.Spine = val.Spine
+		ctx.Chapters = val.Chapters
+		ctx.Title = val.Title
+		ctx.Creator = val.Creator
+		ctx.Metadata = val.Metadata
+		ctx.NCX = val.NCX
+		ctx.TOC = val.TOC
+		ctx.Detected = val.Detected
+
+		for _, item := range ctx.Manifest {
+			ctx.ManifestByID[item.ID] = item
+			ctx.ManifestByPath[item.FullPath] = item
+		}
+
+		for i, ch := range ctx.Chapters {
+			overlayPath := filepath.Join(ctx.getOverlayDir(), ch.Path)
+			if _, err := os.Stat(overlayPath); err == nil {
+				ctx.Chapters[i].Title = ctx.htmlTitle(ch.Path)
+			}
+		}
+		return nil
+	}
+
 	container, err := ctx.readText("META-INF/container.xml")
 	if err != nil {
 		return err
@@ -141,6 +341,24 @@ func (ctx *BookContext) parse() error {
 	}
 	ctx.Chapters = ctx.buildChapters()
 	ctx.Detected = ctx.detectVolumes()
+
+	bookCacheMu.Lock()
+	bookCache[key] = bookCacheValue{
+		OPFPath:  ctx.OPFPath,
+		OPFDir:   ctx.OPFDir,
+		OPFXML:   ctx.OPFXML,
+		Manifest: ctx.Manifest,
+		Spine:    ctx.Spine,
+		Chapters: ctx.Chapters,
+		Title:    ctx.Title,
+		Creator:  ctx.Creator,
+		Metadata: ctx.Metadata,
+		NCX:      ctx.NCX,
+		TOC:      ctx.TOC,
+		Detected: ctx.Detected,
+	}
+	bookCacheMu.Unlock()
+
 	return nil
 }
 
@@ -217,6 +435,18 @@ func (ctx *BookContext) buildChapters() []Chapter {
 		}
 	}
 
+	fallbackTitles := make([]string, len(chapters))
+	var fallbackIndexes []int
+	for idx := range chapters {
+		if chapters[idx].IDRef != "" && matchedTitles[idx] == "" {
+			fallbackIndexes = append(fallbackIndexes, idx)
+		}
+	}
+	runWorkers(len(fallbackIndexes), func(taskIndex int) {
+		idx := fallbackIndexes[taskIndex]
+		fallbackTitles[idx] = ctx.htmlTitle(chapters[idx].Path)
+	})
+
 	res := make([]Chapter, 0)
 	for idx := range chapters {
 		if chapters[idx].IDRef == "" {
@@ -224,7 +454,7 @@ func (ctx *BookContext) buildChapters() []Chapter {
 		}
 		title := matchedTitles[idx]
 		if title == "" {
-			title = ctx.htmlTitle(chapters[idx].Path)
+			title = fallbackTitles[idx]
 		}
 		if title == "" {
 			title = chapters[idx].Href
@@ -238,6 +468,22 @@ func (ctx *BookContext) buildChapters() []Chapter {
 
 func (ctx *BookContext) Asset(assetPath, id string) ([]byte, string, error) {
 	normalized := normalizeZipPath(assetPath)
+	if ctx.isDeletedInOverlay(normalized) {
+		return nil, "", fmt.Errorf("missing asset (deleted in overlay): %s", normalized)
+	}
+	overlayPath := filepath.Join(ctx.getOverlayDir(), normalized)
+	if _, err := os.Stat(overlayPath); err == nil {
+		data, err := os.ReadFile(overlayPath)
+		if err != nil {
+			return nil, "", err
+		}
+		contentType := contentTypeFor(normalized)
+		if contentType == "text/css" {
+			data = []byte(rewriteCSSURLs(string(data), id, posixDir(normalized)))
+		}
+		return data, contentType, nil
+	}
+
 	f := ctx.Entries[normalized]
 	if f == nil {
 		return nil, "", fmt.Errorf("missing asset: %s", normalized)
@@ -262,7 +508,16 @@ func (ctx *BookContext) readText(name string) (string, error) {
 }
 
 func (ctx *BookContext) readBytes(name string) ([]byte, error) {
-	f := ctx.Entries[normalizeZipPath(name)]
+	normalized := normalizeZipPath(name)
+	if ctx.isDeletedInOverlay(normalized) {
+		return nil, fmt.Errorf("missing EPUB file (deleted in overlay): %s", name)
+	}
+	overlayPath := filepath.Join(ctx.getOverlayDir(), normalized)
+	if _, err := os.Stat(overlayPath); err == nil {
+		return os.ReadFile(overlayPath)
+	}
+
+	f := ctx.Entries[normalized]
 	if f == nil {
 		return nil, fmt.Errorf("missing EPUB file: %s", name)
 	}
@@ -270,22 +525,70 @@ func (ctx *BookContext) readBytes(name string) ([]byte, error) {
 }
 
 func (ctx *BookContext) htmlTitle(name string) string {
+	normalized := normalizeZipPath(name)
+	overlayPath := filepath.Join(ctx.getOverlayDir(), normalized)
+
+	var key titleCacheKey
+	hasOverlay := false
+	if info, err := os.Stat(overlayPath); err == nil {
+		hasOverlay = true
+		key = titleCacheKey{
+			crc:  uint32(info.ModTime().UnixNano()),
+			size: uint64(info.Size()),
+		}
+	} else {
+		f := ctx.Entries[normalized]
+		if f == nil {
+			return ""
+		}
+		key = titleCacheKey{
+			crc:  f.CRC32,
+			size: f.UncompressedSize64,
+		}
+	}
+
+	titleCacheMu.RLock()
+	cachedTitle, found := titleCache[key]
+	titleCacheMu.RUnlock()
+	if found {
+		return cachedTitle
+	}
+
 	lower := strings.ToLower(name)
 	if !strings.HasSuffix(lower, ".html") && !strings.HasSuffix(lower, ".xhtml") {
 		return ""
 	}
-	text, err := ctx.readText(name)
-	if err != nil {
-		return ""
+
+	var text string
+	var err error
+	if hasOverlay {
+		data, errRead := os.ReadFile(overlayPath)
+		if errRead != nil {
+			return ""
+		}
+		text = string(data)
+	} else {
+		text, err = ctx.readText(name)
+		if err != nil {
+			return ""
+		}
 	}
+
 	m := htmlTitleRe.FindStringSubmatch(text)
-	if len(m) == 0 {
-		return ""
+	var title string
+	if len(m) > 0 {
+		if m[1] != "" {
+			title = cleanText(stripTags(m[1]))
+		} else {
+			title = cleanText(stripTags(m[2]))
+		}
 	}
-	if m[1] != "" {
-		return cleanText(stripTags(m[1]))
-	}
-	return cleanText(stripTags(m[2]))
+
+	titleCacheMu.Lock()
+	titleCache[key] = title
+	titleCacheMu.Unlock()
+
+	return title
 }
 
 func readZipFile(f *zip.File) ([]byte, error) {
@@ -295,6 +598,19 @@ func readZipFile(f *zip.File) ([]byte, error) {
 	}
 	defer rc.Close()
 	return io.ReadAll(rc)
+}
+
+func copyZipEntry(zw *zip.Writer, f *zip.File, buf []byte) error {
+	r, err := f.OpenRaw()
+	if err != nil {
+		return err
+	}
+	fw, err := zw.CreateRaw(&f.FileHeader)
+	if err != nil {
+		return err
+	}
+	_, err = io.CopyBuffer(fw, r, buf)
+	return err
 }
 
 func parseRootfile(container string) string {
@@ -539,7 +855,9 @@ func (ctx *BookContext) SaveOriginalMetadata(metadata BookMetadata) error {
 	if err != nil {
 		return err
 	}
-	zw := zip.NewWriter(out)
+	bufOut := bufio.NewWriterSize(out, 2*1024*1024)
+	zw := zip.NewWriter(bufOut)
+	copyBuf := make([]byte, 1024*1024)
 
 	var newCoverBytes []byte
 	isNewImageFile := false
@@ -567,7 +885,6 @@ func (ctx *BookContext) SaveOriginalMetadata(metadata BookMetadata) error {
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		var data []byte
 		if f.Name == ctx.OPFPath {
 			opfContent := applyMetadataToOPF(ctx.OPFXML, metadata)
 			if metadata.CoverImage != "" && !isNewImageFile {
@@ -582,28 +899,30 @@ func (ctx *BookContext) SaveOriginalMetadata(metadata BookMetadata) error {
 					opfContent = replaceXMLBlock(manifestRe, opfContent, manifestBody+"\n"+newItemTag)
 				}
 			}
-			data = []byte(opfContent)
-		} else if isNewImageFile && targetCoverPath != "" && f.Name == targetCoverPath {
-			data = newCoverBytes
-			coverWritten = true
-		} else {
-			data, err = readZipFile(f)
+			header := &zip.FileHeader{Name: f.Name, Method: zip.Deflate}
+			header.SetMode(f.Mode())
+			writer, err := zw.CreateHeader(header)
 			if err != nil {
 				return closeZipErr(zw, out, tmp, err)
 			}
-		}
-		method := uint16(zip.Deflate)
-		if f.Name == "mimetype" {
-			method = zip.Store
-		}
-		header := &zip.FileHeader{Name: f.Name, Method: method}
-		header.SetMode(f.Mode())
-		writer, err := zw.CreateHeader(header)
-		if err != nil {
-			return closeZipErr(zw, out, tmp, err)
-		}
-		if _, err := writer.Write(data); err != nil {
-			return closeZipErr(zw, out, tmp, err)
+			if _, err := writer.Write([]byte(opfContent)); err != nil {
+				return closeZipErr(zw, out, tmp, err)
+			}
+		} else if isNewImageFile && targetCoverPath != "" && f.Name == targetCoverPath {
+			header := &zip.FileHeader{Name: f.Name, Method: zip.Deflate}
+			header.SetMode(f.Mode())
+			writer, err := zw.CreateHeader(header)
+			if err != nil {
+				return closeZipErr(zw, out, tmp, err)
+			}
+			if _, err := writer.Write(newCoverBytes); err != nil {
+				return closeZipErr(zw, out, tmp, err)
+			}
+			coverWritten = true
+		} else {
+			if err := copyZipEntry(zw, f, copyBuf); err != nil {
+				return closeZipErr(zw, out, tmp, err)
+			}
 		}
 	}
 
@@ -626,17 +945,16 @@ func (ctx *BookContext) SaveOriginalMetadata(metadata BookMetadata) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	if err := bufOut.Flush(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
 	if err := out.Close(); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
-	ctx.Close()
-	if err := os.Remove(ctx.FilePath); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, ctx.FilePath); err != nil {
-		_ = os.Remove(tmp)
+	if err := replaceBookFileWithTemp(ctx.ID, ctx, tmp); err != nil {
 		return err
 	}
 	return nil
@@ -679,4 +997,42 @@ func parseNCX(ncx, opfDir string) []TocPoint {
 		}
 	}
 	return points
+}
+
+func checkAndRecoverOverlay(id string, filePath string) {
+	overlayDir := filepath.Join(editDir, ".overlay", id)
+	if oInfo, err := os.Stat(overlayDir); err == nil && oInfo.IsDir() {
+		if hasOverlayFiles(overlayDir) {
+			overlayVersionsMu.Lock()
+			if overlayVersions[id] == 0 {
+				overlayVersions[id] = time.Now().UnixNano()
+			}
+			overlayVersionsMu.Unlock()
+
+			select {
+			case bgSaveChan <- bgSaveJob{id: id, filePath: filePath}:
+			default:
+				go func() {
+					bgSaveChan <- bgSaveJob{id: id, filePath: filePath}
+				}()
+			}
+		}
+	}
+}
+
+func hasOverlayFiles(dir string) bool {
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, f := range files {
+		if f.Name() != ".deleted" {
+			return true
+		}
+	}
+	deletedFile := filepath.Join(dir, ".deleted")
+	if oInfo, err := os.Stat(deletedFile); err == nil && oInfo.Size() > 0 {
+		return true
+	}
+	return false
 }

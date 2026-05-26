@@ -23,6 +23,19 @@ const severityColor = {
   info: "#35658f"
 };
 
+const manualRepairTasks = [
+  {
+    fixId: "BUILD_TOC_PAGE",
+    title: "Xây dựng trang mục lục",
+    description: "Tạo hoặc dựng lại trang TOC hiển thị trong spine từ danh sách chương hiện tại."
+  },
+  {
+    fixId: "BUILD_COVER_PAGE",
+    title: "Xây dựng trang cover",
+    description: "Tạo hoặc dựng lại trang bìa XHTML từ ảnh cover có trong EPUB và đưa lên đầu spine."
+  }
+];
+
 export function RepairModal({ open, bookId, bookTitle, onClose, onSuccess }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -164,6 +177,43 @@ export function RepairModal({ open, bookId, bookTitle, onClose, onSuccess }: Pro
                       <span>Chọn tất cả có thể sửa</span>
                     </button>
                   ) : null}
+                </div>
+              </div>
+
+              <div style={{ border: "1px solid #d7e7df", borderRadius: "8px", background: "#f8fcfa", padding: "12px", display: "flex", flexDirection: "column", gap: "10px" }}>
+                <div style={{ color: "#1f624d", fontWeight: 700, fontSize: "13px" }}>Tác vụ dựng lại thủ công</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "10px" }}>
+                  {manualRepairTasks.map((task) => {
+                    const checked = selectedSet.has(task.fixId);
+                    return (
+                      <label
+                        key={task.fixId}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "22px minmax(0, 1fr)",
+                          gap: "8px",
+                          alignItems: "start",
+                          border: "1px solid #dcece5",
+                          borderRadius: "7px",
+                          background: checked ? "#e9f6f0" : "#fff",
+                          padding: "10px",
+                          cursor: loading ? "not-allowed" : "pointer"
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={loading}
+                          onChange={() => toggleFix(task.fixId)}
+                          style={{ marginTop: "2px" }}
+                        />
+                        <span style={{ minWidth: 0 }}>
+                          <strong style={{ display: "block", color: "#26352f", fontSize: "12px", marginBottom: "3px" }}>{task.title}</strong>
+                          <span style={{ display: "block", color: "#687168", fontSize: "11px", lineHeight: 1.4 }}>{task.description}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
 

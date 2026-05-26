@@ -2,6 +2,7 @@ package service
 
 import (
 	"archive/zip"
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 func (s *Service) Export(id string, ranges []ExportRange, includeFrontmatter bool, metadata BookMetadata, coverImage string, onProgress func(index, total int, label string)) ([]ExportedFile, error) {
@@ -48,47 +50,138 @@ func (ctx *BookContext) Export(ranges []ExportRange, includeFrontmatter bool, me
 
 	metadata = normalizeMetadata(metadata, ctx.Metadata)
 	baseTitle := metadata.Title
-	bookDir := filepath.Join(outputRoot, sanitizeFileName(baseTitle))
+	bookDir := filepath.Join(outputRoot, sanitizeFileNameLimit(baseTitle, 80))
 	if err := os.MkdirAll(bookDir, 0755); err != nil {
 		return nil, err
 	}
-	var outputs []ExportedFile
-	for i, r := range ranges {
-		if onProgress != nil {
-			onProgress(i, len(ranges), r.Label)
-		}
+	return ctx.exportRangesParallel(bookDir, baseTitle, ranges, includeFrontmatter, metadata, coverImage, onProgress)
+}
+
+func (ctx *BookContext) exportRangesParallel(bookDir string, baseTitle string, ranges []ExportRange, includeFrontmatter bool, metadata BookMetadata, coverImage string, onProgress func(index, total int, label string)) ([]ExportedFile, error) {
+	for _, r := range ranges {
 		if err := ctx.validateRange(r); err != nil {
 			return nil, err
 		}
-
-		coverSrc := r.CoverImage
-		if coverSrc == "" {
-			coverSrc = coverImage
-		}
-
-		var customCoverBytes []byte
-		if coverSrc != "" {
-			resolvedBytes, err := ctx.resolveCoverBytes(coverSrc)
-			if err != nil {
-				return nil, fmt.Errorf("lỗi xử lý ảnh đại diện cho %s: %w", r.Label, err)
-			}
-			customCoverBytes = resolvedBytes
-		}
-
-		selected := ctx.selectedSpine(r, includeFrontmatter)
-		name := fmt.Sprintf("%s - %s.epub", sanitizeFileName(baseTitle), sanitizeFileName(r.Label))
+	}
+	seenOutputs := make(map[string]bool, len(ranges))
+	for _, r := range ranges {
+		name := exportFileName(bookDir, baseTitle, r.Label)
 		full := filepath.Join(bookDir, name)
-		if err := ctx.writeSplit(full, r.Label, selected, metadata, customCoverBytes); err != nil {
-			return nil, err
+		if seenOutputs[full] {
+			return nil, fmt.Errorf("duplicate export output filename: %s", name)
 		}
-		info, err := os.Stat(full)
-		if err != nil {
-			return nil, err
+		seenOutputs[full] = true
+	}
+
+	outputs := make([]ExportedFile, len(ranges))
+	tasks := make(chan int)
+	var wg sync.WaitGroup
+	var progressMu sync.Mutex
+	var errMu sync.Mutex
+	var firstErr error
+
+	setErr := func(err error) {
+		if err == nil {
+			return
 		}
-		rel, _ := filepath.Rel(outputRoot, full)
-		outputs = append(outputs, ExportedFile{Name: name, Path: full, URL: "/api/files/" + url.PathEscape(filepath.ToSlash(rel)), Size: info.Size()})
+		errMu.Lock()
+		defer errMu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	hasErr := func() bool {
+		errMu.Lock()
+		defer errMu.Unlock()
+		return firstErr != nil
+	}
+
+	workers := workerCount(len(ranges))
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for index := range tasks {
+				if hasErr() {
+					continue
+				}
+				r := ranges[index]
+				if onProgress != nil {
+					progressMu.Lock()
+					onProgress(index, len(ranges), r.Label)
+					progressMu.Unlock()
+				}
+				output, err := ctx.exportRange(bookDir, baseTitle, r, includeFrontmatter, metadata, coverImage)
+				if err != nil {
+					setErr(err)
+					continue
+				}
+				outputs[index] = output
+			}
+		}()
+	}
+	for i := range ranges {
+		tasks <- i
+	}
+	close(tasks)
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return outputs, nil
+}
+
+func (ctx *BookContext) exportRange(bookDir string, baseTitle string, r ExportRange, includeFrontmatter bool, metadata BookMetadata, coverImage string) (ExportedFile, error) {
+	coverSrc := r.CoverImage
+	if coverSrc == "" {
+		coverSrc = coverImage
+	}
+
+	var customCoverBytes []byte
+	if coverSrc != "" {
+		resolvedBytes, err := ctx.resolveCoverBytes(coverSrc)
+		if err != nil {
+			return ExportedFile{}, fmt.Errorf("failed to process cover for %s: %w", r.Label, err)
+		}
+		customCoverBytes = resolvedBytes
+	}
+
+	selected := ctx.selectedSpine(r, includeFrontmatter)
+	name := exportFileName(bookDir, baseTitle, r.Label)
+	full := filepath.Join(bookDir, name)
+	if err := ctx.writeSplit(full, r.Label, selected, metadata, customCoverBytes); err != nil {
+		return ExportedFile{}, err
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		return ExportedFile{}, err
+	}
+	rel, _ := filepath.Rel(outputRoot, full)
+	return ExportedFile{Name: name, Path: full, URL: "/api/files/" + url.PathEscape(filepath.ToSlash(rel)), Size: info.Size()}, nil
+}
+
+func exportFileName(bookDir string, title string, label string) string {
+	labelPart := sanitizeFileNameLimit(label, 40)
+	suffix := " - " + labelPart + ".epub"
+
+	nameBudget := 120
+	pathBudget := 240 - len([]rune(bookDir)) - 1 - len([]rune(".tmp"))
+	if pathBudget > 0 && pathBudget < nameBudget {
+		nameBudget = pathBudget
+	}
+
+	titleBudget := nameBudget - len([]rune(suffix))
+	if titleBudget < 12 {
+		fallbackBudget := nameBudget - len([]rune(".epub"))
+		if fallbackBudget < 8 {
+			fallbackBudget = 8
+		}
+		return sanitizeFileNameLimit(labelPart, fallbackBudget) + ".epub"
+	}
+
+	titlePart := sanitizeFileNameLimit(title, titleBudget)
+	return titlePart + suffix
 }
 
 func (ctx *BookContext) RangeImages(startIndex, endIndex int, includeFrontmatter bool) ([]string, error) {
@@ -206,7 +299,9 @@ func (ctx *BookContext) writeSplit(outputPath, label string, selected []SpineRef
 	if err != nil {
 		return err
 	}
-	zw := zip.NewWriter(out)
+	bufOut := bufio.NewWriterSize(out, 2*1024*1024)
+	zw := zip.NewWriter(bufOut)
+	copyBuf := make([]byte, 1024*1024)
 	written := map[string]bool{}
 	writeEntry := func(name string, data []byte, method uint16) error {
 		if written[name] {
@@ -281,21 +376,21 @@ func (ctx *BookContext) writeSplit(outputPath, label string, selected []SpineRef
 		if p == "mimetype" || p == ctx.OPFPath || p == ncxPath {
 			continue
 		}
-		var data []byte
-		var err error
 		if len(customCoverBytes) > 0 && coverPath != "" && p == coverPath {
-			data = customCoverBytes
+			if err := writeEntry(p, customCoverBytes, zip.Deflate); err != nil {
+				return closeZipErr(zw, out, tmp, err)
+			}
 		} else {
 			f := ctx.Entries[p]
 			if f == nil || f.FileInfo().IsDir() {
 				continue
 			}
-			data, err = readZipFile(f)
-			if err != nil {
-				return closeZipErr(zw, out, tmp, err)
-			}
 			lowerP := strings.ToLower(p)
 			if strings.HasSuffix(lowerP, ".html") || strings.HasSuffix(lowerP, ".xhtml") {
+				data, err := readZipFile(f)
+				if err != nil {
+					return closeZipErr(zw, out, tmp, err)
+				}
 				if p == navPath {
 					cleanedHTML := ctx.cleanNavHTML(string(data), navPath, selected)
 					cleanedHTML = cleanDeadVolumeContainers(cleanedHTML, p, selectedPaths)
@@ -306,10 +401,17 @@ func (ctx *BookContext) writeSplit(outputPath, label string, selected []SpineRef
 					cleanedHTML = cleanHTMLLinks(cleanedHTML, p, selectedPaths)
 					data = []byte(cleanedHTML)
 				}
+				if err := writeEntry(p, data, zip.Deflate); err != nil {
+					return closeZipErr(zw, out, tmp, err)
+				}
+			} else {
+				if !written[p] {
+					written[p] = true
+					if err := copyZipEntry(zw, f, copyBuf); err != nil {
+						return closeZipErr(zw, out, tmp, err)
+					}
+				}
 			}
-		}
-		if err := writeEntry(p, data, zip.Deflate); err != nil {
-			return closeZipErr(zw, out, tmp, err)
 		}
 	}
 	volumeMetadata := metadata
@@ -321,6 +423,11 @@ func (ctx *BookContext) writeSplit(outputPath, label string, selected []SpineRef
 		return closeZipErr(zw, out, tmp, err)
 	}
 	if err := zw.Close(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := bufOut.Flush(); err != nil {
 		_ = out.Close()
 		_ = os.Remove(tmp)
 		return err
@@ -1349,7 +1456,7 @@ func (ctx *BookContext) resolveCoverBytes(coverImageStr string) ([]byte, error) 
 			return nil, fmt.Errorf("lỗi tạo request tải ảnh: %w", err)
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-		
+
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {

@@ -1,11 +1,26 @@
 import React, { useState, useEffect, useRef } from "react";
-import { X, Play, Puzzle, Terminal, Check, AlertCircle, RefreshCw, Plus, Trash2 } from "lucide-react";
-import type { ExtensionInfo } from "../lib/types";
+import { X, Play, Puzzle, Terminal, Check, AlertCircle, RefreshCw, Plus, Trash2, Download, Store, Package, Shield, ArrowUpCircle } from "lucide-react";
+import type { ExtensionInfo, StoreExtensionInfo } from "../lib/types";
 
 type Props = {
   open: boolean;
   onClose: () => void;
   onRunSuccess?: (fileNames: string[]) => void;
+};
+
+type SidebarTab = "installed" | "store";
+
+type ChoiceOption = {
+  id: string;
+  label: string;
+  description?: string;
+};
+
+type ChoicePrompt = {
+  choiceId: string;
+  prompt: string;
+  multiple: boolean;
+  options: ChoiceOption[];
 };
 
 export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
@@ -23,10 +38,33 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
   const [captchaScreenshot, setCaptchaScreenshot] = useState("");
   const [inputText, setInputText] = useState("");
   const [sendingInteraction, setSendingInteraction] = useState(false);
-  
+  const [choicePrompt, setChoicePrompt] = useState<ChoicePrompt | null>(null);
+  const [choiceSelection, setChoiceSelection] = useState<string[]>([]);
+
+  // Store tab state
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("installed");
+  const [storeExtensions, setStoreExtensions] = useState<StoreExtensionInfo[]>([]);
+  const [storeLoading, setStoreLoading] = useState(false);
+  const [storeError, setStoreError] = useState("");
+  const [installingId, setInstallingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+
   const consoleBottomRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const refreshExtensions = async () => {
+    try {
+      const res = await fetch("/api/extensions");
+      if (!res.ok) throw new Error("Không thể tải danh sách extension");
+      const data = await res.json();
+      setExtensions(data || []);
+      return data || [];
+    } catch (err: any) {
+      setError(err.message || "Lỗi khi tải danh sách extension.");
+      return [];
+    }
+  };
 
   useEffect(() => {
     if (open) {
@@ -41,7 +79,12 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
       setCaptchaScreenshot("");
       setInputText("");
       setSendingInteraction(false);
-      
+      setChoicePrompt(null);
+      setChoiceSelection([]);
+      setSidebarTab("installed");
+      setStoreExtensions([]);
+      setStoreError("");
+
       fetch("/api/extensions")
         .then((res) => {
           if (!res.ok) throw new Error("Không thể tải danh sách extension");
@@ -75,6 +118,27 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
     }
   }, [logs]);
 
+  useEffect(() => {
+    if (sidebarTab === "store" && storeExtensions.length === 0 && !storeLoading) {
+      fetchStore();
+    }
+  }, [sidebarTab]);
+
+  const fetchStore = async () => {
+    setStoreLoading(true);
+    setStoreError("");
+    try {
+      const res = await fetch("/api/extensions/store");
+      if (!res.ok) throw new Error("Không thể kết nối tới Extension Store");
+      const data = await res.json();
+      setStoreExtensions(data || []);
+    } catch (err: any) {
+      setStoreError(err.message || "Lỗi khi tải Extension Store.");
+    } finally {
+      setStoreLoading(false);
+    }
+  };
+
   if (!open) return null;
 
   const handleSelectExtension = (ext: ExtensionInfo) => {
@@ -82,7 +146,9 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
     setError("");
     setSuccess("");
     setLogs([]);
-    
+    setChoicePrompt(null);
+    setChoiceSelection([]);
+
     const initialData: Record<string, any> = {};
     if (ext.inputs) {
       ext.inputs.forEach((input) => {
@@ -140,11 +206,7 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
       const newExt = await response.json();
       setSuccess(`Đã thêm thành công extension "${newExt.name}".`);
 
-      const res = await fetch("/api/extensions");
-      if (!res.ok) throw new Error("Không thể tải lại danh sách extension");
-      const data = await res.json();
-      setExtensions(data || []);
-
+      const data = await refreshExtensions();
       const found = data?.find((e: any) => e.id === newExt.id);
       if (found) {
         handleSelectExtension(found);
@@ -181,11 +243,7 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
 
       setSuccess(`Đã xóa thành công extension "${selectedExt.name}".`);
 
-      const res = await fetch("/api/extensions");
-      if (!res.ok) throw new Error("Không thể tải lại danh sách extension");
-      const data = await res.json();
-      setExtensions(data || []);
-
+      const data = await refreshExtensions();
       if (data && data.length > 0) {
         handleSelectExtension(data[0]);
       } else {
@@ -199,6 +257,67 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
     }
   };
 
+  const handleUpdateExtension = async (id: string) => {
+    setUpdatingId(id);
+    setError("");
+    setSuccess("");
+    try {
+      const response = await fetch("/api/extensions/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(errText || "Không thể cập nhật extension.");
+      }
+      const updatedExt = await response.json();
+      setSuccess(`Đã cập nhật thành công extension "${updatedExt.name}"!`);
+
+      const data = await refreshExtensions();
+      const found = data?.find((e: any) => e.id === id);
+      if (found) handleSelectExtension(found);
+
+      fetchStore();
+    } catch (err: any) {
+      setError(err.message || "Lỗi khi cập nhật extension.");
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleInstallFromStore = async (item: StoreExtensionInfo) => {
+    setInstallingId(item.id);
+    setError("");
+    setSuccess("");
+    try {
+      const response = await fetch("/api/extensions/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ downloadUrl: item.downloadUrl }),
+      });
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(errText || "Không thể cài đặt extension.");
+      }
+      const newExt = await response.json();
+      setSuccess(`Đã cài đặt thành công extension "${newExt.name}" từ Store!`);
+
+      const data = await refreshExtensions();
+      const found = data?.find((e: any) => e.id === newExt.id);
+      if (found) {
+        handleSelectExtension(found);
+        setSidebarTab("installed");
+      }
+
+      fetchStore();
+    } catch (err: any) {
+      setError(err.message || "Lỗi khi cài đặt extension.");
+    } finally {
+      setInstallingId(null);
+    }
+  };
+
   const handleStop = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -206,18 +325,26 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
       setLogs((prev) => [...prev, "[-] Đang ngắt thực thi..."]);
       setShowCaptchaPanel(false);
       setCaptchaScreenshot("");
+      setChoicePrompt(null);
+      setChoiceSelection([]);
       setActiveRunId(null);
     }
   };
 
   const handleScreenshotClick = async (e: React.MouseEvent<HTMLDivElement>) => {
     if (!activeRunId || sendingInteraction) return;
-    const rect = e.currentTarget.getBoundingClientRect();
+    const img = e.currentTarget.querySelector<HTMLImageElement>(".screenshotImg");
+    if (!img || !img.naturalWidth || !img.naturalHeight) return;
+
+    const rect = img.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
+    if (clickX < 0 || clickY < 0 || clickX > rect.width || clickY > rect.height) {
+      return;
+    }
 
-    const x = clickX * (1024 / rect.width);
-    const y = clickY * (768 / rect.height);
+    const x = clickX * (img.naturalWidth / rect.width);
+    const y = clickY * (img.naturalHeight / rect.height);
 
     setSendingInteraction(true);
     try {
@@ -283,6 +410,46 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
     }
   };
 
+  const toggleChoice = (optionId: string) => {
+    if (!choicePrompt) return;
+    setChoiceSelection((prev) => {
+      if (!choicePrompt.multiple) return [optionId];
+      return prev.includes(optionId)
+        ? prev.filter((id) => id !== optionId)
+        : [...prev, optionId];
+    });
+  };
+
+  const handleSubmitChoice = async () => {
+    if (!activeRunId || !choicePrompt || choiceSelection.length === 0 || sendingInteraction) return;
+
+    setSendingInteraction(true);
+    try {
+      const res = await fetch("/api/extensions/interact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runId: activeRunId,
+          action: "choice",
+          text: JSON.stringify(choiceSelection),
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Không thể gửi lựa chọn");
+      }
+
+      setLogs((prev) => [...prev, `[+] Đã chọn: ${choiceSelection.join(", ")}`]);
+      setChoicePrompt(null);
+      setChoiceSelection([]);
+    } catch (err: any) {
+      console.error("Lỗi gửi lựa chọn:", err);
+      setLogs((prev) => [...prev, `[-] Lỗi gửi lựa chọn: ${err.message}`]);
+    } finally {
+      setSendingInteraction(false);
+    }
+  };
+
   const handleRun = async () => {
     if (!selectedExt) return;
     setRunning(true);
@@ -293,6 +460,8 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
     setShowCaptchaPanel(false);
     setCaptchaScreenshot("");
     setInputText("");
+    setChoicePrompt(null);
+    setChoiceSelection([]);
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -339,12 +508,23 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
             } else if (data.type === "captcha_resolved") {
               setShowCaptchaPanel(false);
               setCaptchaScreenshot("");
+            } else if (data.type === "choice_required") {
+              const options = Array.isArray(data.options) ? data.options : [];
+              setChoicePrompt({
+                choiceId: data.choiceId || "",
+                prompt: data.prompt || "Chọn mục cần tải",
+                multiple: data.multiple !== false,
+                options,
+              });
+              setChoiceSelection(options.map((option: ChoiceOption) => option.id));
             } else if (data.type === "done") {
               const fileNames = data.fileNames || (data.fileName ? [data.fileName] : []);
               setSuccess(`Hoàn tất! Đã tạo sách thành công: ${fileNames.join(", ")}`);
               setRunning(false);
               setShowCaptchaPanel(false);
               setCaptchaScreenshot("");
+              setChoicePrompt(null);
+              setChoiceSelection([]);
               setActiveRunId(null);
               abortControllerRef.current = null;
               if (onRunSuccess) onRunSuccess(fileNames);
@@ -353,6 +533,8 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
               setRunning(false);
               setShowCaptchaPanel(false);
               setCaptchaScreenshot("");
+              setChoicePrompt(null);
+              setChoiceSelection([]);
               setActiveRunId(null);
               abortControllerRef.current = null;
             }
@@ -369,18 +551,25 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
       setRunning(false);
       setShowCaptchaPanel(false);
       setCaptchaScreenshot("");
+      setChoicePrompt(null);
+      setChoiceSelection([]);
       setActiveRunId(null);
     } finally {
       abortControllerRef.current = null;
     }
   };
 
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  };
+
   return (
     <div className="modalBackdrop" role="presentation" onMouseDown={onClose}>
-      <section 
-        className="metadataModal extensionsModal" 
-        role="dialog" 
-        aria-modal="true" 
+      <section
+        className="metadataModal extensionsModal"
+        role="dialog"
+        aria-modal="true"
         onMouseDown={(e) => e.stopPropagation()}
         style={{
           width: showCaptchaPanel ? "1350px" : "880px",
@@ -390,7 +579,7 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
         <style dangerouslySetInnerHTML={{ __html: `
           .extensionsModal {
             max-width: 95vw;
-            height: 580px;
+            height: 620px;
             max-height: 95vh;
             display: flex;
             flex-direction: column;
@@ -412,14 +601,70 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
 
           /* Left Sidebar: List of Extensions */
           .extensionsListSidebar {
-            width: 250px;
+            width: 270px;
             border-right: 1px solid #e2dfd6;
-            padding: 16px;
             display: flex;
             flex-direction: column;
             background: #f4f2e9;
             flex-shrink: 0;
             overflow: hidden;
+          }
+
+          /* Sidebar Tabs */
+          .extSidebarTabs {
+            display: flex;
+            border-bottom: 1px solid #e2dfd6;
+            background: #eae7dc;
+            flex-shrink: 0;
+          }
+
+          .extSidebarTab {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            padding: 10px 8px;
+            font-size: 11.5px;
+            font-weight: 700;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            color: #687168;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            transition: all 0.2s ease;
+            position: relative;
+          }
+
+          .extSidebarTab:hover {
+            color: #373e3a;
+            background: rgba(31, 98, 77, 0.05);
+          }
+
+          .extSidebarTab.active {
+            color: #1f624d;
+            background: #f4f2e9;
+          }
+
+          .extSidebarTab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 12px;
+            right: 12px;
+            height: 2px;
+            background: #1f624d;
+            border-radius: 2px 2px 0 0;
+          }
+
+          .extSidebarContent {
+            flex: 1;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            min-height: 0;
           }
 
           .extListScrollArea {
@@ -468,6 +713,7 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
             color: #ba2525;
             cursor: pointer;
             transition: all 0.2s ease;
+            flex-shrink: 0;
           }
 
           .deleteExtBtn:hover:not(:disabled) {
@@ -480,20 +726,8 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
             cursor: not-allowed;
           }
 
-          .extListTitle {
-            font-size: 13px;
-            font-weight: 700;
-            color: #373e3a;
-            margin-bottom: 12px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-          }
-
           .extItemRow {
-            padding: 10px 12px;
+            padding: 9px 10px;
             border-radius: 6px;
             border: 1px solid transparent;
             cursor: pointer;
@@ -501,7 +735,7 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
             display: flex;
             align-items: center;
             gap: 8px;
-            margin-bottom: 6px;
+            margin-bottom: 4px;
             text-align: left;
             background: none;
             width: 100%;
@@ -518,12 +752,204 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
             border-color: #1f624d;
           }
 
+          .extItemInfo {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+          }
+
           .extItemName {
-            font-size: 13px;
+            font-size: 12.5px;
             font-weight: 600;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+          }
+
+          .extItemBadges {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+          }
+
+          .extBadge {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 9.5px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            text-transform: uppercase;
+            line-height: 1.5;
+            white-space: nowrap;
+          }
+
+          .extBadge.official {
+            background: rgba(31, 98, 77, 0.15);
+            color: #1f624d;
+          }
+
+          .extItemRow.active .extBadge.official {
+            background: rgba(255, 255, 255, 0.2);
+            color: #c8e6c9;
+          }
+
+          .extBadge.thirdparty {
+            background: rgba(104, 113, 104, 0.12);
+            color: #687168;
+          }
+
+          .extItemRow.active .extBadge.thirdparty {
+            background: rgba(255, 255, 255, 0.15);
+            color: #b0bfb0;
+          }
+
+          .extBadge.update {
+            background: rgba(230, 126, 34, 0.15);
+            color: #d35400;
+            animation: badgePulse 2s ease-in-out infinite;
+          }
+
+          .extItemRow.active .extBadge.update {
+            background: rgba(255, 200, 100, 0.3);
+            color: #ffd180;
+          }
+
+          @keyframes badgePulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+          }
+
+          /* Store item styles */
+          .storeItemRow {
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid #e2dfd6;
+            background: #fff;
+            margin-bottom: 8px;
+            transition: all 0.2s ease;
+          }
+
+          .storeItemRow:hover {
+            border-color: #c9c6bd;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+          }
+
+          .storeItemHeader {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+          }
+
+          .storeItemName {
+            font-size: 13px;
+            font-weight: 700;
+            color: #1a231f;
+            flex: 1;
+          }
+
+          .storeItemMeta {
+            font-size: 10.5px;
+            color: #8c8f8c;
+          }
+
+          .storeItemDesc {
+            font-size: 11.5px;
+            color: #687168;
+            line-height: 1.4;
+            margin-bottom: 8px;
+          }
+
+          .storeItemActions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+
+          .storeInstallBtn {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 5px 14px;
+            border-radius: 5px;
+            font-size: 11.5px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid #1f624d;
+            background: #1f624d;
+            color: #fff;
+          }
+
+          .storeInstallBtn:hover:not(:disabled) {
+            background: #174d3b;
+          }
+
+          .storeInstallBtn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+          }
+
+          .storeInstallBtn.installed {
+            background: #f4f2e9;
+            color: #687168;
+            border-color: #e2dfd6;
+            cursor: default;
+          }
+
+          .storeUpdateBtn {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 5px 14px;
+            border-radius: 5px;
+            font-size: 11.5px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid #e67e22;
+            background: #e67e22;
+            color: #fff;
+          }
+
+          .storeUpdateBtn:hover:not(:disabled) {
+            background: #d35400;
+          }
+
+          .storeUpdateBtn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+          }
+
+          .updateExtBtn {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 5px 12px;
+            border-radius: 5px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid #e67e22;
+            background: #e67e22;
+            color: #fff;
+            white-space: nowrap;
+          }
+
+          .updateExtBtn:hover:not(:disabled) {
+            background: #d35400;
+            border-color: #d35400;
+          }
+
+          .updateExtBtn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
           }
 
           /* Right Panel: Content Form & Console */
@@ -629,6 +1055,70 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
           .consoleLine.success { color: #8cf4a8; }
           .consoleLine.info { color: #8cd2f4; }
 
+          .choicePanel {
+            border: 1px solid #d7d2c5;
+            background: #fffaf0;
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+          }
+
+          .choicePanel h5 {
+            margin: 0;
+            font-size: 13px;
+            color: #1f624d;
+          }
+
+          .choiceList {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 220px;
+            overflow-y: auto;
+          }
+
+          .choiceItem {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+            border: 1px solid #e5dfd2;
+            border-radius: 6px;
+            background: #fff;
+            padding: 8px;
+            cursor: pointer;
+          }
+
+          .choiceItem input {
+            margin-top: 2px;
+          }
+
+          .choiceItemText {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+          }
+
+          .choiceItemText strong {
+            font-size: 12px;
+            color: #26302b;
+            line-height: 1.25;
+          }
+
+          .choiceItemText span {
+            font-size: 11px;
+            color: #6b716c;
+            line-height: 1.35;
+          }
+
+          .choiceActions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+          }
+
           .captchaPanel {
             width: 680px;
             border-left: 1px solid #e2dfd6;
@@ -723,6 +1213,57 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
             outline: none;
           }
 
+          .storeEmptyState {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 32px 16px;
+            color: #8c8f8c;
+            text-align: center;
+            gap: 8px;
+          }
+
+          .storeEmptyState p {
+            font-size: 12px;
+            line-height: 1.4;
+            margin: 0;
+          }
+
+          .extensionsModal .toastMessage {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-radius: 7px;
+            padding: 9px 12px;
+            font-size: 12px;
+            line-height: 1.35;
+            min-width: 0;
+          }
+
+          .extensionsModal .toastMessage svg {
+            flex: 0 0 auto;
+          }
+
+          .extensionsModal .toastMessage span {
+            min-width: 0;
+            overflow-wrap: anywhere;
+          }
+
+          .extensionsModal .toastMessage.error {
+            margin-bottom: 0;
+            border: 1px solid #d79a89;
+            background: #fff1ec;
+            color: #8f2c18;
+          }
+
+          .extensionsModal .toastMessage.success {
+            margin-bottom: 0;
+            border: 1px solid #94bfa7;
+            background: #eef8f2;
+            color: #1f624d;
+          }
+
           @keyframes spin {
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
@@ -750,51 +1291,177 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
         <div className="extensionsModalBody">
           {/* Sidebar */}
           <div className="extensionsListSidebar">
-            <span className="extListTitle">Danh sách Extension</span>
-            <div className="extListScrollArea">
-              {loading ? (
-                <div style={{ fontSize: "12px", color: "#687168", padding: "12px 0" }}>
-                  Đang quét thư mục...
-                </div>
-              ) : extensions.length === 0 ? (
-                <div style={{ fontSize: "11px", color: "#8c8f8c", padding: "12px 0", textAlign: "center" }}>
-                  Không tìm thấy script .js nào trong thư mục extensions/
-                </div>
-              ) : (
-                extensions.map((ext) => (
-                  <button
-                    key={ext.id}
-                    type="button"
-                    className={`extItemRow ${selectedExt?.id === ext.id ? "active" : ""}`}
-                    onClick={() => handleSelectExtension(ext)}
-                    disabled={running}
-                  >
-                    <Puzzle size={14} />
-                    <span className="extItemName" title={ext.name}>{ext.name}</span>
-                  </button>
-                ))
-              )}
-            </div>
-
-            {/* Pinned Upload Button */}
-            <div style={{ borderTop: "1px solid #e2dfd6", paddingTop: "12px" }}>
+            {/* Tabs */}
+            <div className="extSidebarTabs">
               <button
                 type="button"
-                className="addExtBtn"
-                onClick={handleUploadClick}
-                disabled={running || loading}
-                title="Tải lên tệp tin .js mới"
+                className={`extSidebarTab ${sidebarTab === "installed" ? "active" : ""}`}
+                onClick={() => setSidebarTab("installed")}
               >
-                <Plus size={14} />
-                <span>Thêm Extension</span>
+                <Package size={13} />
+                <span>Đã cài ({extensions.length})</span>
               </button>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileChange}
-                accept=".js"
-                style={{ display: "none" }}
-              />
+              <button
+                type="button"
+                className={`extSidebarTab ${sidebarTab === "store" ? "active" : ""}`}
+                onClick={() => setSidebarTab("store")}
+              >
+                <Store size={13} />
+                <span>Cửa hàng</span>
+              </button>
+            </div>
+
+            <div className="extSidebarContent">
+              {/* ===== Installed Tab ===== */}
+              {sidebarTab === "installed" && (
+                <>
+                  <div className="extListScrollArea">
+                    {loading ? (
+                      <div style={{ fontSize: "12px", color: "#687168", padding: "12px 0" }}>
+                        Đang quét thư mục...
+                      </div>
+                    ) : extensions.length === 0 ? (
+                      <div className="storeEmptyState">
+                        <Package size={28} style={{ opacity: 0.4 }} />
+                        <p>Chưa có extension nào được cài đặt.</p>
+                        <p style={{ fontSize: "11px" }}>Thêm file .js hoặc duyệt Cửa hàng để bắt đầu.</p>
+                      </div>
+                    ) : (
+                      extensions.map((ext) => (
+                        <button
+                          key={ext.id}
+                          type="button"
+                          className={`extItemRow ${selectedExt?.id === ext.id ? "active" : ""}`}
+                          onClick={() => handleSelectExtension(ext)}
+                          disabled={running}
+                        >
+                          <Puzzle size={14} style={{ flexShrink: 0 }} />
+                          <div className="extItemInfo">
+                            <span className="extItemName" title={ext.name}>{ext.name}</span>
+                            <div className="extItemBadges">
+                              {ext.isOfficial ? (
+                                <span className="extBadge official">
+                                  <Shield size={8} />
+                                  Chính thức
+                                </span>
+                              ) : (
+                                <span className="extBadge thirdparty">
+                                  Bên thứ ba
+                                </span>
+                              )}
+                              {ext.hasUpdate && (
+                                <span className="extBadge update">
+                                  <ArrowUpCircle size={8} />
+                                  Có cập nhật
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Pinned Upload Button */}
+                  <div style={{ borderTop: "1px solid #e2dfd6", paddingTop: "12px" }}>
+                    <button
+                      type="button"
+                      className="addExtBtn"
+                      onClick={handleUploadClick}
+                      disabled={running || loading}
+                      title="Tải lên tệp tin .js mới"
+                    >
+                      <Plus size={14} />
+                      <span>Thêm Extension</span>
+                    </button>
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleFileChange}
+                      accept=".js"
+                      style={{ display: "none" }}
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* ===== Store Tab ===== */}
+              {sidebarTab === "store" && (
+                <div className="extListScrollArea" style={{ marginBottom: 0 }}>
+                  {storeLoading ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "8px", padding: "24px 0", color: "#687168" }}>
+                      <RefreshCw size={20} className="animate-spin" />
+                      <span style={{ fontSize: "12px" }}>Đang tải từ GitHub...</span>
+                    </div>
+                  ) : storeError ? (
+                    <div className="storeEmptyState">
+                      <AlertCircle size={24} style={{ color: "#ba2525", opacity: 0.7 }} />
+                      <p style={{ color: "#ba2525" }}>{storeError}</p>
+                      <button
+                        type="button"
+                        className="addExtBtn"
+                        onClick={fetchStore}
+                        style={{ marginTop: "8px", maxWidth: "160px" }}
+                      >
+                        <RefreshCw size={12} />
+                        Thử lại
+                      </button>
+                    </div>
+                  ) : storeExtensions.length === 0 ? (
+                    <div className="storeEmptyState">
+                      <Store size={28} style={{ opacity: 0.4 }} />
+                      <p>Không tìm thấy extension nào trên Store.</p>
+                    </div>
+                  ) : (
+                    storeExtensions.map((item) => (
+                      <div key={item.id} className="storeItemRow">
+                        <div className="storeItemHeader">
+                          <Shield size={13} style={{ color: "#1f624d", flexShrink: 0 }} />
+                          <span className="storeItemName">{item.name}</span>
+                          <span className="storeItemMeta">{formatFileSize(item.size)}</span>
+                        </div>
+                        <div className="storeItemDesc">{item.description}</div>
+                        <div className="storeItemActions">
+                          {item.installed && item.hasUpdate ? (
+                            <button
+                              type="button"
+                              className="storeUpdateBtn"
+                              onClick={() => handleInstallFromStore(item)}
+                              disabled={installingId === item.id}
+                            >
+                              {installingId === item.id ? (
+                                <RefreshCw size={12} className="animate-spin" />
+                              ) : (
+                                <ArrowUpCircle size={12} />
+                              )}
+                              <span>Cập nhật</span>
+                            </button>
+                          ) : item.installed ? (
+                            <span className="storeInstallBtn installed">
+                              <Check size={12} />
+                              <span>Đã cài</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="storeInstallBtn"
+                              onClick={() => handleInstallFromStore(item)}
+                              disabled={installingId === item.id}
+                            >
+                              {installingId === item.id ? (
+                                <RefreshCw size={12} className="animate-spin" />
+                              ) : (
+                                <Download size={12} />
+                              )}
+                              <span>{installingId === item.id ? "Đang cài..." : "Cài đặt"}</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -804,18 +1471,44 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
               <>
                 <div className="extHeaderArea" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                   <div style={{ flex: 1, marginRight: "12px" }}>
-                    <h4>{selectedExt.name}</h4>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                      <h4 style={{ margin: 0 }}>{selectedExt.name}</h4>
+                      {selectedExt.isOfficial && (
+                        <span className="extBadge official" style={{ fontSize: "10px" }}>
+                          <Shield size={9} />
+                          Chính thức
+                        </span>
+                      )}
+                    </div>
                     <p style={{ margin: "4px 0 0 0" }}>{selectedExt.description}</p>
                   </div>
-                  <button
-                    type="button"
-                    className="deleteExtBtn"
-                    onClick={handleDeleteClick}
-                    disabled={running || loading}
-                    title="Xóa extension này"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                    {selectedExt.hasUpdate && (
+                      <button
+                        type="button"
+                        className="updateExtBtn"
+                        onClick={() => handleUpdateExtension(selectedExt.id)}
+                        disabled={updatingId === selectedExt.id || running || loading}
+                        title="Cập nhật lên bản mới nhất từ Store"
+                      >
+                        {updatingId === selectedExt.id ? (
+                          <RefreshCw size={12} className="animate-spin" />
+                        ) : (
+                          <ArrowUpCircle size={12} />
+                        )}
+                        <span>Cập nhật</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="deleteExtBtn"
+                      onClick={handleDeleteClick}
+                      disabled={running || loading}
+                      title="Xóa extension này"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="extFormArea">
@@ -879,6 +1572,41 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
                     </div>
                   ))}
 
+                  {choicePrompt && (
+                    <div className="choicePanel">
+                      <h5>{choicePrompt.prompt}</h5>
+                      <div className="choiceList">
+                        {choicePrompt.options.map((option) => {
+                          const checked = choiceSelection.includes(option.id);
+                          return (
+                            <label key={option.id} className="choiceItem">
+                              <input
+                                type={choicePrompt.multiple ? "checkbox" : "radio"}
+                                checked={checked}
+                                onChange={() => toggleChoice(option.id)}
+                                disabled={sendingInteraction}
+                              />
+                              <span className="choiceItemText">
+                                <strong>{option.label}</strong>
+                                {option.description && <span>{option.description}</span>}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <div className="choiceActions">
+                        <button
+                          type="button"
+                          className="smallButton strong"
+                          onClick={handleSubmitChoice}
+                          disabled={sendingInteraction || choiceSelection.length === 0}
+                        >
+                          Xác nhận lựa chọn
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Run logs console */}
                   {(running || logs.length > 0) && (
                     <div className="extConsoleLogs">
@@ -899,8 +1627,11 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
                 </div>
               </>
             ) : (
-              <div style={{ display: "flex", flex: 1, alignItems: "center", justifyContent: "center", color: "#888", fontSize: "13px" }}>
-                Chọn một tiện ích mở rộng ở thanh bên để cấu hình.
+              <div style={{ display: "flex", flex: 1, alignItems: "center", justifyContent: "center", color: "#888", fontSize: "13px", flexDirection: "column", gap: "8px" }}>
+                <Puzzle size={32} style={{ opacity: 0.2 }} />
+                {sidebarTab === "store"
+                  ? "Cài đặt extension từ Cửa hàng để bắt đầu sử dụng."
+                  : "Chọn một tiện ích mở rộng ở thanh bên để cấu hình."}
               </div>
             )}
           </div>

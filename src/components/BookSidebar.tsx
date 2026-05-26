@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { BookOpen, FileArchive, PanelLeftClose, PanelLeftOpen, RefreshCw, Combine, FileText, Plus, Trash2, Puzzle } from "lucide-react";
+import { BookOpen, FileArchive, PanelLeftClose, PanelLeftOpen, RefreshCw, Combine, FileText, Plus, Trash2, Puzzle, Pencil } from "lucide-react";
 import type { EpubFile } from "../lib/types";
 import { formatBytes } from "../lib/format";
 
@@ -17,6 +17,7 @@ type Props = {
   onUploadBooks: (files: File[]) => void;
   onDeleteBook: (id: string, name: string) => void;
   onDeleteBooks: (ids: string[]) => void;
+  onRenameBook: (id: string, name: string) => void;
 };
 
 export function BookSidebar({
@@ -32,7 +33,8 @@ export function BookSidebar({
   onExtensionsClick,
   onUploadBooks,
   onDeleteBook,
-  onDeleteBooks
+  onDeleteBooks,
+  onRenameBook
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isBulkMode, setIsBulkMode] = useState(false);
@@ -188,22 +190,35 @@ export function BookSidebar({
               ) : (
                 <BookOpen size={16} style={{ flexShrink: 0 }} />
               )}
-              <span className="sidebarText" style={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", marginRight: "20px" }}>
+              <span className="sidebarText" style={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", marginRight: isBulkMode ? "20px" : "56px" }}>
                 {book.name}
               </span>
               <small className="sidebarText">{formatBytes(book.size)}</small>
               {!isBulkMode && (
-                <button
-                  className="bookDeleteBtn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDeleteBook(book.id, book.name);
-                  }}
-                  title={`Xoá ${book.name}`}
-                  disabled={busy}
-                >
-                  <Trash2 size={14} />
-                </button>
+                <div className="bookActions">
+                  <button
+                    className="bookInlineActionBtn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRenameBook(book.id, book.name);
+                    }}
+                    title={`\u0110\u1ed5i t\u00ean ${book.name}`}
+                    disabled={busy}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    className="bookInlineActionBtn danger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteBook(book.id, book.name);
+                    }}
+                    title={`Xoá ${book.name}`}
+                    disabled={busy}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               )}
             </div>
           );

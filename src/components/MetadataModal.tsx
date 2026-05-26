@@ -188,23 +188,34 @@ export function MetadataModal({ open, analysis, metadata, dirty, busy, onChange,
               {activeTab === "book" && (
                 <div className="tabPanePane" style={{ flex: 1, minHeight: 0 }}>
                   {analysis.images.length > 0 ? (
-                    <div className="bookImagesGrid" style={{ maxHeight: "200px" }}>
+                    <div className="bookImagesList metadataBookImagesList">
                       {analysis.images.map((img) => {
                         const isSelected = img === currentCover;
+                        const fileName = img.split("/").pop() || img;
                         return (
-                          <div
+                          <button
+                            type="button"
                             key={img}
-                            className={`bookImageItem ${isSelected ? "selected" : ""}`}
+                            className={`bookImageRowItem ${isSelected ? "selected" : ""}`}
                             onClick={() => onChange({ coverImage: img })}
                             title={img}
                           >
-                            <ImageWithFallback src={getAssetUrl(img)} alt="Book Image" />
-                            {isSelected && (
-                              <div className="selectedCheck">
-                                <Check size={10} color="#fff" />
-                              </div>
+                            <div className="bookImageRowPreview">
+                              <ImageWithFallback src={getAssetUrl(img)} alt={fileName} />
+                            </div>
+                            <span className="bookImageRowInfo">
+                              <span className="imageFileName">{fileName}</span>
+                              <span className="imagePath">{img}</span>
+                            </span>
+                            {isSelected ? (
+                              <span className="selectedRowBadge">
+                                <Check size={12} />
+                                Đang chọn
+                              </span>
+                            ) : (
+                              <span className="selectRowLabel">Chọn</span>
                             )}
-                          </div>
+                          </button>
                         );
                       })}
                     </div>

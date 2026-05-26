@@ -2,6 +2,7 @@ package service
 
 import (
 	"archive/zip"
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,10 @@ func (s repairSelection) has(fix string) bool {
 }
 
 func (s *Service) Repair(id string, fixes []string) (models.RepairResponse, error) {
+	zipMu := getZipWriteLock(id)
+	zipMu.Lock()
+	defer zipMu.Unlock()
+
 	lock := s.getBookLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -175,6 +180,23 @@ func (s *Service) Repair(id string, fixes []string) (models.RepairResponse, erro
 		}
 	}
 
+	if selected.has("BUILD_COVER_PAGE") {
+		if ensureCoverPage(ctx, editedFiles, &addedManifestItems, &validSpineRefs, &logs) {
+			opfChanged = true
+		}
+	}
+
+	if selected.has("BUILD_TOC_PAGE") {
+		if ensureVisibleTOCPage(ctx, editedFiles, &addedManifestItems, &validSpineRefs, &logs) {
+			opfChanged = true
+		}
+	}
+
+	if selected.has("BUILD_TOC_PAGE") || selected.has("BUILD_COVER_PAGE") {
+		rebuildVisibleTOCDocuments(ctx, validSpineRefs, editedFiles, &logs)
+		rebuildNavDocuments(ctx, validSpineRefs, editedFiles, &logs)
+	}
+
 	if selected.has("FIX_TOC_NCX") && ncxPath != "" {
 		hasNCXDecl := false
 		for _, item := range ctx.Manifest {
@@ -208,7 +230,9 @@ func (s *Service) Repair(id string, fixes []string) (models.RepairResponse, erro
 		selected.has("FIX_MEDIA_TYPES") ||
 		selected.has("ADD_UNMANIFESTED_FILES") ||
 		selected.has("FIX_TOC_NCX") ||
-		selected.has("UPGRADE_EPUB3") {
+		selected.has("UPGRADE_EPUB3") ||
+		selected.has("BUILD_TOC_PAGE") ||
+		selected.has("BUILD_COVER_PAGE") {
 		nextOPF := rebuildOPFManifestAndSpine(ctx, opfContent, validSpineRefs, removedManifestIDs, correctedMediaTypes, addedManifestItems)
 		if nextOPF != opfContent {
 			opfContent = nextOPF
@@ -233,12 +257,17 @@ func (s *Service) Repair(id string, fixes []string) (models.RepairResponse, erro
 		}, nil
 	}
 
+	if err := s.pushUndoSnapshot(id); err != nil {
+		return models.RepairResponse{}, err
+	}
 	tmp := ctx.FilePath + ".tmp"
 	out, err := os.Create(tmp)
 	if err != nil {
 		return models.RepairResponse{}, err
 	}
-	zw := zip.NewWriter(out)
+	bufOut := bufio.NewWriterSize(out, 2*1024*1024)
+	zw := zip.NewWriter(bufOut)
+	copyBuf := make([]byte, 1024*1024)
 
 	if normalizeMimetype {
 		header := &zip.FileHeader{Name: "mimetype", Method: zip.Store}
@@ -262,26 +291,20 @@ func (s *Service) Repair(id string, fixes []string) (models.RepairResponse, erro
 			continue
 		}
 
-		var data []byte
-		var writeMethod uint16 = zip.Deflate
 		if content, ok := editedFiles[f.Name]; ok {
-			data = content
-		} else {
-			data, err = readZipFile(f)
+			header := &zip.FileHeader{Name: f.Name, Method: zip.Deflate}
+			header.SetMode(f.Mode())
+			writer, err := zw.CreateHeader(header)
 			if err != nil {
 				return closeRepairZipErr(zw, out, tmp, err)
 			}
-			writeMethod = f.Method
-		}
-
-		header := &zip.FileHeader{Name: f.Name, Method: writeMethod}
-		header.SetMode(f.Mode())
-		writer, err := zw.CreateHeader(header)
-		if err != nil {
-			return closeRepairZipErr(zw, out, tmp, err)
-		}
-		if _, err := writer.Write(data); err != nil {
-			return closeRepairZipErr(zw, out, tmp, err)
+			if _, err := writer.Write(content); err != nil {
+				return closeRepairZipErr(zw, out, tmp, err)
+			}
+		} else {
+			if err := copyZipEntry(zw, f, copyBuf); err != nil {
+				return closeRepairZipErr(zw, out, tmp, err)
+			}
 		}
 		written[f.Name] = true
 	}
@@ -307,18 +330,17 @@ func (s *Service) Repair(id string, fixes []string) (models.RepairResponse, erro
 		_ = os.Remove(tmp)
 		return models.RepairResponse{}, err
 	}
+	if err := bufOut.Flush(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return models.RepairResponse{}, err
+	}
 	if err := out.Close(); err != nil {
 		_ = os.Remove(tmp)
 		return models.RepairResponse{}, err
 	}
 
-	ctx.Close()
-	if err := os.Remove(ctx.FilePath); err != nil {
-		_ = os.Remove(tmp)
-		return models.RepairResponse{}, err
-	}
-	if err := os.Rename(tmp, ctx.FilePath); err != nil {
-		_ = os.Remove(tmp)
+	if err := replaceBookFileWithTemp(id, ctx, tmp); err != nil {
 		return models.RepairResponse{}, err
 	}
 
@@ -391,6 +413,10 @@ func repairContentDocuments(ctx *BookContext, selected repairSelection, editedFi
 				xmlFixCount++
 				return "<" + tagBody + ` xmlns="http://www.w3.org/1999/xhtml">`
 			})
+
+			var entityFixCount int
+			fixedHTML, entityFixCount = repairXHTMLEntities(fixedHTML)
+			xmlFixCount += entityFixCount
 		}
 
 		if selected.has("CLEAN_BROKEN_CONTENT_LINKS") {
@@ -405,6 +431,12 @@ func repairContentDocuments(ctx *BookContext, selected repairSelection, editedFi
 				fixedHTML = cleanedHTML
 				*logs = append(*logs, cleanLogs...)
 			}
+
+			cleanedHTML, cleanLogs = cleanBrokenImages(ctx, item.FullPath, fixedHTML)
+			if len(cleanLogs) > 0 {
+				fixedHTML = cleanedHTML
+				*logs = append(*logs, cleanLogs...)
+			}
 		}
 
 		if fixedHTML != originalHTML {
@@ -414,6 +446,106 @@ func repairContentDocuments(ctx *BookContext, selected repairSelection, editedFi
 			}
 		}
 	}
+}
+
+var xhtmlNamedEntityReplacements = map[string]string{
+	"nbsp":   "&#160;",
+	"copy":   "&#169;",
+	"reg":    "&#174;",
+	"trade":  "&#8482;",
+	"ndash":  "&#8211;",
+	"mdash":  "&#8212;",
+	"hellip": "&#8230;",
+	"lsquo":  "&#8216;",
+	"rsquo":  "&#8217;",
+	"ldquo":  "&#8220;",
+	"rdquo":  "&#8221;",
+	"laquo":  "&#171;",
+	"raquo":  "&#187;",
+	"middot": "&#183;",
+	"bull":   "&#8226;",
+	"times":  "&#215;",
+	"divide": "&#247;",
+	"plusmn": "&#177;",
+	"euro":   "&#8364;",
+	"pound":  "&#163;",
+	"yen":    "&#165;",
+}
+
+func repairXHTMLEntities(input string) (string, int) {
+	fixCount := 0
+	entityRe := regexp.MustCompile(`&(#\d+|#x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]+);`)
+	fixed := entityRe.ReplaceAllStringFunc(input, func(entity string) string {
+		name := strings.TrimSuffix(strings.TrimPrefix(entity, "&"), ";")
+		lowerName := strings.ToLower(name)
+		if strings.HasPrefix(lowerName, "#") {
+			return entity
+		}
+		switch lowerName {
+		case "amp", "lt", "gt", "quot", "apos":
+			return entity
+		}
+		if replacement, ok := xhtmlNamedEntityReplacements[lowerName]; ok {
+			fixCount++
+			return replacement
+		}
+		fixCount++
+		return "&amp;" + name + ";"
+	})
+
+	var bareAmpFixCount int
+	fixed, bareAmpFixCount = escapeBareAmpersands(fixed)
+	fixCount += bareAmpFixCount
+
+	return fixed, fixCount
+}
+
+func escapeBareAmpersands(input string) (string, int) {
+	var b strings.Builder
+	fixCount := 0
+	for i := 0; i < len(input); i++ {
+		if input[i] == '&' && !hasValidXMLCharacterReferenceAt(input, i) {
+			b.WriteString("&amp;")
+			fixCount++
+			continue
+		}
+		b.WriteByte(input[i])
+	}
+	if fixCount == 0 {
+		return input, 0
+	}
+	return b.String(), fixCount
+}
+
+func hasValidXMLCharacterReferenceAt(input string, index int) bool {
+	rest := input[index:]
+	for _, entity := range []string{"&amp;", "&lt;", "&gt;", "&quot;", "&apos;"} {
+		if strings.HasPrefix(rest, entity) {
+			return true
+		}
+	}
+
+	if strings.HasPrefix(rest, "&#x") || strings.HasPrefix(rest, "&#X") {
+		pos := index + 3
+		start := pos
+		for pos < len(input) && isHexDigit(input[pos]) {
+			pos++
+		}
+		return pos > start && pos < len(input) && input[pos] == ';'
+	}
+	if strings.HasPrefix(rest, "&#") {
+		pos := index + 2
+		start := pos
+		for pos < len(input) && input[pos] >= '0' && input[pos] <= '9' {
+			pos++
+		}
+		return pos > start && pos < len(input) && input[pos] == ';'
+	}
+	return false
+}
+
+func isHexDigit(ch byte) bool {
+	return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')
 }
 
 func cleanBrokenAnchorHrefs(ctx *BookContext, htmlPath, htmlContent string) (string, []string) {
@@ -483,8 +615,275 @@ func rebuildNavDocuments(ctx *BookContext, validSpineRefs []SpineRef, editedFile
 	}
 }
 
+func ensureVisibleTOCPage(ctx *BookContext, editedFiles map[string][]byte, addedManifestItems *[]ManifestItem, validSpineRefs *[]SpineRef, logs *[]string) bool {
+	changed := false
+
+	var tocItem ManifestItem
+	if existing, ok := ctx.findVisibleTOCItem(); ok && existing != nil {
+		tocItem = *existing
+	} else {
+		tocPath := uniqueRepairZipPath(ctx, editedFiles, normalizeZipPath(ctx.repairPageDir()+"toc.xhtml"))
+		tocID := uniqueRepairManifestID(ctx, *addedManifestItems, "toc_page")
+		tocItem = ManifestItem{
+			ID:        tocID,
+			Href:      relativeZipPath(ctx.OPFPath, tocPath),
+			FullPath:  tocPath,
+			MediaType: "application/xhtml+xml",
+		}
+		*addedManifestItems = append(*addedManifestItems, tocItem)
+		changed = true
+		*logs = append(*logs, fmt.Sprintf("[TOC] Đã tạo trang mục lục hiển thị: %s", tocPath))
+	}
+
+	nextHTML := ctx.buildVisibleTOCDocument(tocItem.FullPath, *validSpineRefs)
+	currentHTML := ""
+	if edited, ok := editedFiles[tocItem.FullPath]; ok {
+		currentHTML = string(edited)
+	} else if text, err := ctx.readText(tocItem.FullPath); err == nil {
+		currentHTML = text
+	}
+	if strings.TrimSpace(currentHTML) != strings.TrimSpace(nextHTML) {
+		editedFiles[tocItem.FullPath] = []byte(nextHTML)
+		changed = true
+		*logs = append(*logs, fmt.Sprintf("[TOC] Đã dựng lại nội dung trang mục lục: %s", tocItem.FullPath))
+	}
+
+	if ensureSpineRefAfterCover(ctx, validSpineRefs, tocItem.ID) {
+		changed = true
+		*logs = append(*logs, "[Spine] Đã đưa trang mục lục vào reading order.")
+	}
+
+	return changed
+}
+
+func ensureCoverPage(ctx *BookContext, editedFiles map[string][]byte, addedManifestItems *[]ManifestItem, validSpineRefs *[]SpineRef, logs *[]string) bool {
+	coverImage := ctx.findCoverImageItem()
+	if coverImage == nil {
+		*logs = append(*logs, "[Cover] Không tìm thấy ảnh bìa trong manifest để tạo trang cover.")
+		return false
+	}
+
+	changed := false
+	var coverPage ManifestItem
+	if existing, ok := ctx.findCoverPageItem(); ok && existing != nil {
+		coverPage = *existing
+	} else {
+		coverPath := uniqueRepairZipPath(ctx, editedFiles, normalizeZipPath(ctx.repairPageDir()+"cover.xhtml"))
+		coverID := uniqueRepairManifestID(ctx, *addedManifestItems, "cover_page")
+		coverPage = ManifestItem{
+			ID:        coverID,
+			Href:      relativeZipPath(ctx.OPFPath, coverPath),
+			FullPath:  coverPath,
+			MediaType: "application/xhtml+xml",
+		}
+		*addedManifestItems = append(*addedManifestItems, coverPage)
+		changed = true
+		*logs = append(*logs, fmt.Sprintf("[Cover] Đã tạo trang cover: %s", coverPath))
+	}
+
+	nextHTML := buildCoverPageDocument(coverPage.FullPath, coverImage.FullPath, ctx.Title)
+	currentHTML := ""
+	if edited, ok := editedFiles[coverPage.FullPath]; ok {
+		currentHTML = string(edited)
+	} else if text, err := ctx.readText(coverPage.FullPath); err == nil {
+		currentHTML = text
+	}
+	if strings.TrimSpace(currentHTML) != strings.TrimSpace(nextHTML) {
+		editedFiles[coverPage.FullPath] = []byte(nextHTML)
+		changed = true
+		*logs = append(*logs, fmt.Sprintf("[Cover] Đã dựng lại nội dung trang cover từ ảnh: %s", coverImage.FullPath))
+	}
+
+	if ensureSpineRefFirst(validSpineRefs, coverPage.ID) {
+		changed = true
+		*logs = append(*logs, "[Spine] Đã đưa trang cover lên đầu reading order.")
+	}
+
+	return changed
+}
+
+func buildCoverPageDocument(coverPagePath, coverImagePath, title string) string {
+	if strings.TrimSpace(title) == "" {
+		title = "Cover"
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <title>Cover</title>
+  <style type="text/css">
+    html, body { margin: 0; padding: 0; background: #ffffff; }
+    body { text-align: center; }
+    .cover { margin: 0; padding: 0; text-align: center; }
+    .cover img { max-width: 100%%; max-height: 100vh; height: auto; width: auto; }
+  </style>
+</head>
+<body>
+  <div class="cover">
+    <img src="%s" alt="%s" />
+  </div>
+</body>
+</html>`, escapeXML(relativeZipPath(coverPagePath, coverImagePath)), escapeXML(title))
+}
+
+func ensureSpineRefFirst(spine *[]SpineRef, id string) bool {
+	return ensureSpineRefAt(spine, id, 0)
+}
+
+func ensureSpineRefAfterCover(ctx *BookContext, spine *[]SpineRef, id string) bool {
+	targetIndex := 0
+	foundCover := false
+	for _, ref := range *spine {
+		if ref.IDRef == id {
+			continue
+		}
+		if ctx.isCoverSpineRef(ref) {
+			targetIndex++
+			foundCover = true
+			break
+		}
+		targetIndex++
+	}
+	if !foundCover {
+		targetIndex = 0
+	}
+	return ensureSpineRefAt(spine, id, targetIndex)
+}
+
+func ensureSpineRefAt(spine *[]SpineRef, id string, targetIndex int) bool {
+	if id == "" {
+		return false
+	}
+	nextRef := SpineRef{IDRef: id, Linear: true}
+	oldIndex := -1
+	without := make([]SpineRef, 0, len(*spine))
+	for idx, ref := range *spine {
+		if ref.IDRef == id {
+			if oldIndex == -1 {
+				nextRef = ref
+				oldIndex = idx
+			}
+			continue
+		}
+		without = append(without, ref)
+	}
+	if targetIndex < 0 {
+		targetIndex = 0
+	}
+	if targetIndex > len(without) {
+		targetIndex = len(without)
+	}
+	if oldIndex == targetIndex {
+		return false
+	}
+	without = append(without, SpineRef{})
+	copy(without[targetIndex+1:], without[targetIndex:])
+	without[targetIndex] = nextRef
+	*spine = without
+	return true
+}
+
+func (ctx *BookContext) repairPageDir() string {
+	if len(ctx.Chapters) > 0 {
+		if dir := posixDir(ctx.Chapters[0].Path); dir != "" {
+			return dir
+		}
+	}
+	return ctx.OPFDir
+}
+
+func (ctx *BookContext) findVisibleTOCItem() (*ManifestItem, bool) {
+	var fallback *ManifestItem
+	for _, item := range ctx.Manifest {
+		copy := item
+		if !isVisibleTOCPage(copy) {
+			continue
+		}
+		if ctx.spineUsesID(copy.ID) {
+			return &copy, true
+		}
+		if fallback == nil {
+			fallback = &copy
+		}
+	}
+	return fallback, fallback != nil
+}
+
+func (ctx *BookContext) findCoverPageItem() (*ManifestItem, bool) {
+	var fallback *ManifestItem
+	for _, item := range ctx.Manifest {
+		copy := item
+		if !isCoverPageItem(copy) {
+			continue
+		}
+		if ctx.spineUsesID(copy.ID) {
+			return &copy, true
+		}
+		if fallback == nil {
+			fallback = &copy
+		}
+	}
+	return fallback, fallback != nil
+}
+
+func (ctx *BookContext) findCoverImageItem() *ManifestItem {
+	if coverID := ctx.coverID(); coverID != "" {
+		if item, ok := ctx.ManifestByID[coverID]; ok && isImageManifestItem(item) && ctx.Entries[item.FullPath] != nil {
+			copy := item
+			return &copy
+		}
+	}
+	var firstImage *ManifestItem
+	for _, item := range ctx.Manifest {
+		if !isImageManifestItem(item) || ctx.Entries[item.FullPath] == nil {
+			continue
+		}
+		copy := item
+		lower := strings.ToLower(item.ID + " " + item.Href + " " + item.FullPath)
+		if strings.Contains(lower, "cover") || strings.Contains(lower, "title") || strings.Contains(lower, "front") || strings.Contains(lower, "folder") {
+			return &copy
+		}
+		if firstImage == nil {
+			firstImage = &copy
+		}
+	}
+	return firstImage
+}
+
+func (ctx *BookContext) spineUsesID(id string) bool {
+	return spineUsesID(ctx.Spine, id)
+}
+
+func (ctx *BookContext) isCoverSpineRef(ref SpineRef) bool {
+	if item, ok := ctx.ManifestByID[ref.IDRef]; ok {
+		return isCoverPageItem(item)
+	}
+	lower := strings.ToLower(ref.IDRef)
+	return strings.Contains(lower, "cover") || strings.Contains(lower, "titlepage")
+}
+
+func isImageManifestItem(item ManifestItem) bool {
+	return strings.HasPrefix(strings.ToLower(item.MediaType), "image/") ||
+		strings.HasPrefix(strings.ToLower(contentTypeFor(item.FullPath)), "image/")
+}
+
+func isCoverPageItem(item ManifestItem) bool {
+	if !isHTMLManifestItem(item) || hasPropertyToken(item.Attrs["properties"], "nav") {
+		return false
+	}
+	lower := strings.ToLower(item.ID + " " + item.Href + " " + item.FullPath)
+	base := strings.ToLower(filepath.Base(item.FullPath))
+	return strings.Contains(lower, "titlepage") ||
+		strings.Contains(lower, "cover") ||
+		base == "title.xhtml" ||
+		base == "title.html"
+}
+
 func isVisibleTOCPage(item ManifestItem) bool {
 	if !isHTMLManifestItem(item) || hasPropertyToken(item.Attrs["properties"], "nav") {
+		return false
+	}
+	if isCoverPageItem(item) {
 		return false
 	}
 	base := strings.ToLower(filepath.Base(item.FullPath))
@@ -495,7 +894,7 @@ func (ctx *BookContext) buildVisibleTOCDocument(tocPath string, spineRefs []Spin
 	var links strings.Builder
 	for _, ref := range spineRefs {
 		item, ok := ctx.ManifestByID[ref.IDRef]
-		if !ok || !isHTMLManifestItem(item) || item.FullPath == tocPath || hasPropertyToken(item.Attrs["properties"], "nav") {
+		if !ok || !isHTMLManifestItem(item) || item.FullPath == tocPath || hasPropertyToken(item.Attrs["properties"], "nav") || isCoverPageItem(item) {
 			continue
 		}
 		title := ctx.chapterTitleForItem(ref.IDRef, item)
@@ -913,4 +1312,77 @@ func cleanHTMLTOC(ctx *BookContext, htmlPath, htmlContent string) (string, []str
 	}
 
 	return htmlContent, logs
+}
+
+func cleanBrokenImages(ctx *BookContext, htmlPath, htmlContent string) (string, []string) {
+	var logs []string
+	baseDir := posixDir(htmlPath)
+
+	// Regex for <img> tags
+	reImg := regexp.MustCompile(`(?is)<img\b[^>]*>`)
+	reSrc := regexp.MustCompile(`(?is)\bsrc\s*=\s*["']([^"']*)["']`)
+
+	// Regex for <image> tags inside SVG (like <image xlink:href="..." /> or <image href="..." />)
+	reSvgImage := regexp.MustCompile(`(?is)<image\b[^>]*>`)
+	reHref := regexp.MustCompile(`(?is)\b(?:href|xlink:href)\s*=\s*["']([^"']*)["']`)
+
+	// Regex for <link> tags (e.g. stylesheet links)
+	reLink := regexp.MustCompile(`(?is)<link\b[^>]*>`)
+	reLinkHref := regexp.MustCompile(`(?is)\bhref\s*=\s*["']([^"']*)["']`)
+
+	// Clean <img> tags
+	cleanedHTML := reImg.ReplaceAllStringFunc(htmlContent, func(imgTag string) string {
+		m := reSrc.FindStringSubmatch(imgTag)
+		if len(m) < 2 {
+			return imgTag
+		}
+		src := strings.TrimSpace(m[1])
+		if skipLocalReference(src) {
+			return imgTag
+		}
+		resolved := resolveZipHref(baseDir, src)
+		if resolved == "" || ctx.Entries[resolved] != nil {
+			return imgTag
+		}
+		logs = append(logs, fmt.Sprintf("[Nội dung] Đã xóa thẻ ảnh bị hỏng trong %s: %s", htmlPath, src))
+		return ""
+	})
+
+	// Clean <image> tags
+	cleanedHTML = reSvgImage.ReplaceAllStringFunc(cleanedHTML, func(imgTag string) string {
+		m := reHref.FindStringSubmatch(imgTag)
+		if len(m) < 2 {
+			return imgTag
+		}
+		href := strings.TrimSpace(m[1])
+		if skipLocalReference(href) {
+			return imgTag
+		}
+		resolved := resolveZipHref(baseDir, href)
+		if resolved == "" || ctx.Entries[resolved] != nil {
+			return imgTag
+		}
+		logs = append(logs, fmt.Sprintf("[Nội dung] Đã xóa ảnh SVG bị hỏng trong %s: %s", htmlPath, href))
+		return "" 
+	})
+
+	// Clean <link> tags
+	cleanedHTML = reLink.ReplaceAllStringFunc(cleanedHTML, func(linkTag string) string {
+		m := reLinkHref.FindStringSubmatch(linkTag)
+		if len(m) < 2 {
+			return linkTag
+		}
+		href := strings.TrimSpace(m[1])
+		if skipLocalReference(href) {
+			return linkTag
+		}
+		resolved := resolveZipHref(baseDir, href)
+		if resolved == "" || ctx.Entries[resolved] != nil {
+			return linkTag
+		}
+		logs = append(logs, fmt.Sprintf("[Nội dung] Đã xóa liên kết tài nguyên hỏng trong %s: %s", htmlPath, href))
+		return ""
+	})
+
+	return cleanedHTML, logs
 }

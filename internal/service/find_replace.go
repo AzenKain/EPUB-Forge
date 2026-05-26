@@ -52,39 +52,7 @@ func (s *Service) Find(id string, req models.FindRequest) (models.FindResponse, 
 		chaptersToSearch = ctx.Chapters
 	}
 
-	for _, ch := range chaptersToSearch {
-		content, err := ctx.readText(ch.Path)
-		if err != nil {
-			continue
-		}
-
-		indices := re.FindAllStringIndex(content, -1)
-		for _, loc := range indices {
-			start := loc[0]
-			end := loc[1]
-
-			lineNum, lineContent := getLineNumAndContent(content, start)
-
-			lineStartIdx := start
-			for lineStartIdx > 0 && content[lineStartIdx-1] != '\n' {
-				lineStartIdx--
-			}
-			startCol := start - lineStartIdx
-			endCol := end - lineStartIdx
-
-			matches = append(matches, models.FindMatch{
-				ChapterIndex: ch.Index,
-				ChapterTitle: ch.Title,
-				ChapterPath:  ch.Path,
-				LineNumber:   lineNum,
-				LineContent:  lineContent,
-				StartCol:     startCol,
-				EndCol:       endCol,
-				StartOffset:  start,
-				EndOffset:    end,
-			})
-		}
-	}
+	matches = findChapterMatches(ctx, chaptersToSearch, re)
 
 	return models.FindResponse{Matches: matches}, nil
 }
@@ -134,26 +102,7 @@ func (s *Service) Replace(id string, req models.ReplaceRequest) (models.ReplaceR
 			chaptersToSearch = ctx.Chapters
 		}
 
-		for _, ch := range chaptersToSearch {
-			content, err := ctx.readText(ch.Path)
-			if err != nil {
-				continue
-			}
-
-			var newContent string
-			matchesCount := len(re.FindAllStringIndex(content, -1))
-			if matchesCount > 0 {
-				if req.Mode == "regex" {
-					newContent = re.ReplaceAllString(content, req.Replacement)
-				} else {
-					newContent = re.ReplaceAllStringFunc(content, func(string) string {
-						return req.Replacement
-					})
-				}
-				editedFiles[ch.Path] = []byte(newContent)
-				replacedCount += matchesCount
-			}
-		}
+		editedFiles, replacedCount = replaceAllChapterMatches(ctx, chaptersToSearch, re, req)
 	} else {
 		var chaptersToSearch []Chapter
 		if req.Scope == "current" {
@@ -165,28 +114,9 @@ func (s *Service) Replace(id string, req models.ReplaceRequest) (models.ReplaceR
 			chaptersToSearch = ctx.Chapters
 		}
 
-		type matchInfo struct {
-			chPath string
-			start  int
-			end    int
-		}
 		var allMatches []matchInfo
 
-		for _, ch := range chaptersToSearch {
-			content, err := ctx.readText(ch.Path)
-			if err != nil {
-				continue
-			}
-
-			indices := re.FindAllStringIndex(content, -1)
-			for _, loc := range indices {
-				allMatches = append(allMatches, matchInfo{
-					chPath: ch.Path,
-					start:  loc[0],
-					end:    loc[1],
-				})
-			}
-		}
+		allMatches = collectReplaceMatches(ctx, chaptersToSearch, re)
 
 		if req.MatchIndex < 0 || req.MatchIndex >= len(allMatches) {
 			return models.ReplaceResponse{}, fmt.Errorf("invalid match index: %d", req.MatchIndex)
@@ -222,6 +152,9 @@ func (s *Service) Replace(id string, req models.ReplaceRequest) (models.ReplaceR
 	}
 
 	if replacedCount > 0 {
+		if err := s.pushUndoSnapshot(id); err != nil {
+			return models.ReplaceResponse{}, err
+		}
 		newFileName, err := ctx.writeEditedEPUB(editedFiles)
 		if err != nil {
 			return models.ReplaceResponse{}, fmt.Errorf("failed to write EPUB: %w", err)
@@ -248,7 +181,134 @@ func (s *Service) Replace(id string, req models.ReplaceRequest) (models.ReplaceR
 	}, nil
 }
 
-func getLineNumAndContent(content string, startIdx int) (int, string) {
+func findChapterMatches(ctx *BookContext, chapters []Chapter, re *regexp.Regexp) []models.FindMatch {
+	if len(chapters) == 0 {
+		return nil
+	}
+
+	results := make([][]models.FindMatch, len(chapters))
+	runWorkers(len(chapters), func(idx int) {
+		ch := chapters[idx]
+		content, err := ctx.readText(ch.Path)
+		if err != nil {
+			return
+		}
+
+		indices := re.FindAllStringIndex(content, -1)
+		if len(indices) == 0 {
+			return
+		}
+
+		chapterMatches := make([]models.FindMatch, 0, len(indices))
+		for _, loc := range indices {
+			start := loc[0]
+			end := loc[1]
+			lineNum, lineContent, startCol, endCol := getLineNumAndContent(content, start, end)
+
+			chapterMatches = append(chapterMatches, models.FindMatch{
+				ChapterIndex: ch.Index,
+				ChapterTitle: ch.Title,
+				ChapterPath:  ch.Path,
+				LineNumber:   lineNum,
+				LineContent:  lineContent,
+				StartCol:     startCol,
+				EndCol:       endCol,
+				StartOffset:  start,
+				EndOffset:    end,
+			})
+		}
+		results[idx] = chapterMatches
+	})
+
+	var matches []models.FindMatch
+	for _, chapterMatches := range results {
+		matches = append(matches, chapterMatches...)
+	}
+	return matches
+}
+
+func replaceAllChapterMatches(ctx *BookContext, chapters []Chapter, re *regexp.Regexp, req models.ReplaceRequest) (map[string][]byte, int) {
+	type result struct {
+		path  string
+		data  []byte
+		count int
+	}
+
+	results := make([]result, len(chapters))
+	runWorkers(len(chapters), func(idx int) {
+		ch := chapters[idx]
+		content, err := ctx.readText(ch.Path)
+		if err != nil {
+			return
+		}
+
+		matchesCount := len(re.FindAllStringIndex(content, -1))
+		if matchesCount == 0 {
+			return
+		}
+
+		var newContent string
+		if req.Mode == "regex" {
+			newContent = re.ReplaceAllString(content, req.Replacement)
+		} else {
+			newContent = re.ReplaceAllStringFunc(content, func(string) string {
+				return req.Replacement
+			})
+		}
+		results[idx] = result{path: ch.Path, data: []byte(newContent), count: matchesCount}
+	})
+
+	editedFiles := make(map[string][]byte)
+	replacedCount := 0
+	for _, result := range results {
+		if result.count == 0 {
+			continue
+		}
+		editedFiles[result.path] = result.data
+		replacedCount += result.count
+	}
+	return editedFiles, replacedCount
+}
+
+func collectReplaceMatches(ctx *BookContext, chapters []Chapter, re *regexp.Regexp) []matchInfo {
+	results := make([][]matchInfo, len(chapters))
+	runWorkers(len(chapters), func(idx int) {
+		ch := chapters[idx]
+		content, err := ctx.readText(ch.Path)
+		if err != nil {
+			return
+		}
+
+		indices := re.FindAllStringIndex(content, -1)
+		if len(indices) == 0 {
+			return
+		}
+
+		matches := make([]matchInfo, 0, len(indices))
+		for _, loc := range indices {
+			matches = append(matches, matchInfo{
+				chPath: ch.Path,
+				start:  loc[0],
+				end:    loc[1],
+			})
+		}
+		results[idx] = matches
+	})
+
+	var matches []matchInfo
+	for _, chapterMatches := range results {
+		matches = append(matches, chapterMatches...)
+	}
+	return matches
+}
+
+type matchInfo struct {
+	chPath string
+	start  int
+	end    int
+}
+
+func getLineNumAndContent(content string, startIdx int, endIdx int) (int, string, int, int) {
 	lineNum := 1
 	lastNewline := -1
 	for i := 0; i < startIdx; i++ {
@@ -259,7 +319,7 @@ func getLineNumAndContent(content string, startIdx int) (int, string) {
 	}
 
 	nextNewline := len(content)
-	for i := startIdx; i < len(content); i++ {
+	for i := endIdx; i < len(content); i++ {
 		if content[i] == '\n' {
 			nextNewline = i
 			break
@@ -268,5 +328,7 @@ func getLineNumAndContent(content string, startIdx int) (int, string) {
 
 	lineContent := content[lastNewline+1 : nextNewline]
 	lineContent = strings.TrimSuffix(lineContent, "\r")
-	return lineNum, lineContent
+	startCol := len([]rune(content[lastNewline+1 : startIdx]))
+	endCol := len([]rune(content[lastNewline+1 : endIdx]))
+	return lineNum, lineContent, startCol, endCol
 }

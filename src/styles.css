@@ -207,7 +207,58 @@ button {
   border-color: #d79a89;
 }
 
+.bookActions {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.bookItem:hover .bookActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.bookInlineActionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: #fffdf8;
+  color: #4d574f;
+  padding: 0;
+}
+
+.bookInlineActionBtn:hover {
+  border-color: #2f7d69;
+  background: #e9f6f0;
+  color: #2f7d69;
+}
+
+.bookInlineActionBtn.danger {
+  color: #8f2c18;
+}
+
+.bookInlineActionBtn.danger:hover {
+  border-color: #d79a89;
+  background: #fde8e8;
+  color: #8f2c18;
+}
+
 .sidebarCollapsed .bookDeleteBtn {
+  display: none !important;
+}
+
+.sidebarCollapsed .bookActions {
   display: none !important;
 }
 
@@ -1483,16 +1534,24 @@ button:disabled {
   padding-right: 4px;
 }
 
+.metadataBookImagesList {
+  max-height: 200px;
+}
+
 .bookImageRowItem {
   display: flex;
   align-items: center;
   gap: 12px;
+  width: 100%;
   padding: 8px 12px;
   background: #fff;
   border: 1px solid #ebe8df;
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
+  font: inherit;
+  color: inherit;
+  text-align: left;
 }
 
 .bookImageRowItem:hover {
@@ -1522,7 +1581,7 @@ button:disabled {
 .rowPreviewImg {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .imageFallbackPlaceholder {
@@ -1582,6 +1641,8 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: 0 0 auto;
+  white-space: nowrap;
   background: #2f7d69;
   color: #fff;
   padding: 4px 8px;
@@ -1591,6 +1652,8 @@ button:disabled {
 }
 
 .selectRowLabel {
+  flex: 0 0 auto;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
   color: #687168;

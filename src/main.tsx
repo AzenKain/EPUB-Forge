@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Settings, Type, Sparkles, Search, Wrench, Image as ImageIcon } from "lucide-react";
+import { Settings, Type, Sparkles, Search, Wrench, Image as ImageIcon, Undo2 } from "lucide-react";
 import { BookSidebar } from "./components/BookSidebar";
 import { ChaptersPanel } from "./components/ChaptersPanel";
 import { MetadataModal } from "./components/MetadataModal";
@@ -23,10 +23,17 @@ import {
   type BookMetadata,
   type EpubFile,
   type ExportRange,
+  type UndoStatus,
   type UpdateCheckResponse
 } from "./lib/types";
 import { UpdateModal } from "./components/UpdateModal";
 import "./styles.css";
+
+function isEditableShortcutTarget(target: EventTarget | null) {
+  const element = target instanceof HTMLElement ? target : null;
+  if (!element) return false;
+  return Boolean(element.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']")) || element.isContentEditable;
+}
 
 function App() {
   const {
@@ -78,6 +85,7 @@ function App() {
   const [extensionsOpen, setExtensionsOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResponse | null>(null);
+  const [undoStatus, setUndoStatus] = useState<UndoStatus>({ canUndo: false, count: 0 });
 
   useEffect(() => {
     refreshBooks();
@@ -99,8 +107,26 @@ function App() {
   useEffect(() => {
     if (selectedId) {
       loadAnalysis(selectedId);
+    } else {
+      setUndoStatus({ canUndo: false, count: 0 });
     }
   }, [selectedId]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== "z") {
+        return;
+      }
+      if (isEditableShortcutTarget(event.target) || !analysis || busy || !undoStatus.canUndo) {
+        return;
+      }
+      event.preventDefault();
+      void handleUndo();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [analysis?.id, busy, previewIndex, undoStatus.canUndo]);
 
   const previewUrl = useMemo(() => {
     if (!analysis) {
@@ -141,11 +167,61 @@ function App() {
       const firstIndex = data.spine[0]?.index ?? 0;
       const lastIndex = data.spine.at(-1)?.index ?? firstIndex;
       setRanges(detected.length ? detected : [{ label: "Vol 1", startIndex: firstIndex, endIndex: lastIndex }]);
+      void refreshUndoStatus(data.id);
     } catch (err) {
       setError(readError(err));
       setAnalysis(null);
       setMetadata(emptyMetadata);
       setRanges([]);
+      setUndoStatus({ canUndo: false, count: 0 });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function refreshUndoStatus(id: string) {
+    if (!id) {
+      setUndoStatus({ canUndo: false, count: 0 });
+      return;
+    }
+    try {
+      const status = await api<UndoStatus>(`/api/epubs/${encodeURIComponent(id)}/undo`);
+      setUndoStatus(status);
+    } catch {
+      setUndoStatus({ canUndo: false, count: 0 });
+    }
+  }
+
+  async function handleUndo() {
+    if (!analysis || busy) {
+      return;
+    }
+
+    setBusy("Đang hoàn tác...");
+    setError("");
+    setNotice("");
+    try {
+      const restored = normalizeAnalysis(await api<BookAnalysis>(`/api/epubs/${encodeURIComponent(analysis.id)}/undo`, { method: "POST" }));
+      setAnalysis(restored);
+      setMetadata(restored.metadata);
+      setMetadataDirty(false);
+      setExports([]);
+      setExportProgress(null);
+
+      const detected = restored.detectedVolumes.map(({ label, startIndex, endIndex }) => ({ label, startIndex, endIndex }));
+      const firstIndex = restored.spine[0]?.index ?? 0;
+      const lastIndex = restored.spine.at(-1)?.index ?? firstIndex;
+      setPreviewIndex(Math.min(previewIndex, lastIndex));
+      setRanges(detected.length ? detected : [{ label: "Vol 1", startIndex: firstIndex, endIndex: lastIndex }]);
+
+      const nextBooks = await api<EpubFile[]>("/api/epubs");
+      setBooks(Array.isArray(nextBooks) ? nextBooks : []);
+      await refreshUndoStatus(restored.id);
+      setPreviewRevision((prev) => prev + 1);
+      setNotice("Đã hoàn tác thay đổi gần nhất cho cuốn sách đang mở.");
+    } catch (err) {
+      setError(readError(err));
+      await refreshUndoStatus(analysis.id);
     } finally {
       setBusy("");
     }
@@ -387,6 +463,37 @@ function App() {
     }
   }
 
+  async function handleRenameBook(id: string, name: string) {
+    const currentName = name.replace(/\.epub$/i, "");
+    const nextName = window.prompt("\u0110\u1ed5i t\u00ean file EPUB:", currentName);
+    if (nextName === null) {
+      return;
+    }
+    const trimmedName = nextName.trim();
+    if (!trimmedName || trimmedName === currentName) {
+      return;
+    }
+
+    setBusy("\u0110ang \u0111\u1ed5i t\u00ean s\u00e1ch...");
+    setError("");
+    setNotice("");
+    try {
+      const renamed = await api<EpubFile>(`/api/epubs/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmedName })
+      });
+      await refreshBooks();
+      setSelectedId(renamed.id);
+      void refreshUndoStatus(renamed.id);
+      setNotice(`\u0110\u00e3 \u0111\u1ed5i t\u00ean "${name}" th\u00e0nh "${renamed.name}".`);
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function handleDeleteBook(id: string, name: string) {
     if (!window.confirm(`Bạn có chắc chắn muốn xoá sách "${name}" không?`)) {
       return;
@@ -473,6 +580,7 @@ function App() {
         onUploadBooks={handleUploadBooks}
         onDeleteBook={handleDeleteBook}
         onDeleteBooks={handleDeleteBooks}
+        onRenameBook={handleRenameBook}
       />
 
       <section className="workspace">
@@ -486,6 +594,15 @@ function App() {
                 </p>
               </div>
               <div className="topbarActions">
+                <button
+                  className="smallButton metadataButton"
+                  onClick={handleUndo}
+                  disabled={Boolean(busy) || !undoStatus.canUndo}
+                  title={undoStatus.canUndo ? `Hoàn tác thay đổi gần nhất cho cuốn này (Ctrl+Z). Còn ${undoStatus.count} mốc.` : "Hoàn tác thay đổi gần nhất cho cuốn này (Ctrl+Z)"}
+                >
+                  <Undo2 size={16} />
+                  <span>Hoàn tác</span>
+                </button>
                 <button className={metadataDirty ? "smallButton metadataButton dirty" : "smallButton metadataButton"} onClick={() => setMetadataOpen(true)}>
                   <Settings size={16} />
                   <span>Metadata</span>
@@ -532,6 +649,7 @@ function App() {
                     setMetadataDirty(false);
                   }
                   await refreshBooks();
+                  void refreshUndoStatus(newAnalysis.id);
                 }}
                 onSetBusy={setBusy}
                 onSetError={setError}
@@ -550,6 +668,7 @@ function App() {
                     setMetadataDirty(false);
                   }
                   await refreshBooks();
+                  void refreshUndoStatus(newAnalysis.id);
                 }}
                 onSetBusy={setBusy}
                 onSetError={setError}
@@ -619,7 +738,6 @@ function App() {
           bookTitle={metadata.title || analysis.title}
           onClose={() => setOptimizeOpen(false)}
           onSuccess={async () => {
-            setOptimizeOpen(false);
             await loadAnalysis(analysis.id);
             setPreviewRevision((prev) => prev + 1);
           }}
@@ -640,6 +758,7 @@ function App() {
               setMetadataDirty(false);
             }
             await refreshBooks();
+            void refreshUndoStatus(newAnalysis.id);
             setPreviewRevision((prev) => prev + 1);
           }}
           onSetBusy={setBusy}
@@ -663,6 +782,7 @@ function App() {
               setMetadataDirty(false);
             }
             await refreshBooks();
+            void refreshUndoStatus(newAnalysis.id);
             setPreviewRevision((prev) => prev + 1);
           }}
           onSetBusy={setBusy}
@@ -684,6 +804,7 @@ function App() {
               setMetadataDirty(false);
             }
             await refreshBooks();
+            void refreshUndoStatus(newAnalysis.id);
             setPreviewRevision((prev) => prev + 1);
           }}
         />
@@ -702,6 +823,7 @@ function App() {
               setMetadataDirty(false);
             }
             await refreshBooks();
+            void refreshUndoStatus(newAnalysis.id);
             setPreviewRevision((prev) => prev + 1);
           }}
         />

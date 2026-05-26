@@ -13,6 +13,7 @@ import (
 	_ "image/gif"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"mime"
 	"net/url"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"epubforge/internal/models"
 	"github.com/go-rod/rod"
@@ -51,12 +53,17 @@ type ActiveRun struct {
 	SessionID string
 	Cancel    context.CancelFunc
 	Mu        sync.Mutex
+
+	ChoiceMu sync.Mutex
+	ChoiceID string
+	ChoiceCh chan []string
 }
 
 var (
 	workspace            string
 	editDir              string
 	outputRoot           string
+	undoDir              string
 	itemRe               = regexp.MustCompile(`(?is)<item\b[^>]*/>`)
 	itemrefRe            = regexp.MustCompile(`(?is)<itemref\b[^>]*/?>`)
 	manifestRe           = regexp.MustCompile(`(?is)(<manifest\b[^>]*>)(.*?)(</manifest>)`)
@@ -85,16 +92,18 @@ var (
 type Service struct {
 	bookMu       sync.Mutex
 	locks        map[string]*sync.Mutex
+	undoMu       sync.Mutex
+	undoStacks   map[string][]string
 	browser      *rod.Browser
 	launcher     *launcher.Launcher
 	activeRuns   map[string]*ActiveRun
 	activeRunsMu sync.RWMutex
 
-	version      string
-	updateMu     sync.Mutex
-	updateStatus string
+	version       string
+	updateMu      sync.Mutex
+	updateStatus  string
 	updatePercent int
-	updateErr    string
+	updateErr     string
 }
 
 func New(workspaceDir string, version string) (*Service, error) {
@@ -103,16 +112,32 @@ func New(workspaceDir string, version string) (*Service, error) {
 	if err := os.MkdirAll(editDir, 0755); err != nil {
 		return nil, err
 	}
+
+	if entries, err := os.ReadDir(editDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".tmp") {
+				_ = os.Remove(filepath.Join(editDir, entry.Name()))
+			}
+		}
+	}
 	outputRoot = filepath.Join(workspace, "output")
 	if err := os.MkdirAll(outputRoot, 0755); err != nil {
 		return nil, err
 	}
-	return &Service{
+	undoDir = filepath.Join(workspace, ".undo")
+	_ = os.RemoveAll(undoDir)
+	if err := os.MkdirAll(undoDir, 0755); err != nil {
+		return nil, err
+	}
+	s := &Service{
 		locks:        make(map[string]*sync.Mutex),
+		undoStacks:   make(map[string][]string),
 		activeRuns:   make(map[string]*ActiveRun),
 		version:      version,
 		updateStatus: "idle",
-	}, nil
+	}
+	go s.StartBackgroundWriter()
+	return s, nil
 }
 
 func (s *Service) getBookLock(id string) *sync.Mutex {
@@ -163,13 +188,29 @@ func stripTags(input string) string {
 }
 
 func sanitizeFileName(input string) string {
+	return sanitizeFileNameLimit(input, 120)
+}
+
+func sanitizeFileNameLimit(input string, maxRunes int) string {
 	clean := regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]+`).ReplaceAllString(input, " ")
 	clean = strings.Join(strings.Fields(clean), " ")
+	clean = strings.Trim(clean, " .")
 	if clean == "" {
-		return "epub"
+		clean = "epub"
 	}
-	if len(clean) > 120 {
-		return clean[:120]
+	if maxRunes > 0 {
+		runes := []rune(clean)
+		if len(runes) > maxRunes {
+			clean = strings.Trim(string(runes[:maxRunes]), " .")
+			if clean == "" {
+				clean = "epub"
+			}
+		}
+	}
+	base := strings.TrimSuffix(clean, filepath.Ext(clean))
+	switch strings.ToUpper(base) {
+	case "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		clean = "_" + clean
 	}
 	return clean
 }
@@ -426,6 +467,10 @@ func (s *Service) Asset(id, assetPath string) ([]byte, string, error) {
 }
 
 func (s *Service) SaveMetadata(id string, metadata models.BookMetadata) (models.BookMetadata, error) {
+	zipMu := getZipWriteLock(id)
+	zipMu.Lock()
+	defer zipMu.Unlock()
+
 	lock := s.getBookLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -437,6 +482,9 @@ func (s *Service) SaveMetadata(id string, metadata models.BookMetadata) (models.
 	defer ctx.Close()
 
 	normalized := normalizeMetadata(metadata, ctx.Metadata)
+	if err := s.pushUndoSnapshot(id); err != nil {
+		return models.BookMetadata{}, err
+	}
 	err = ctx.SaveOriginalMetadata(normalized)
 	if err != nil {
 		return models.BookMetadata{}, err
@@ -458,11 +506,51 @@ func (s *Service) UploadEpub(filename string, data []byte) (string, error) {
 }
 
 func (s *Service) DeleteEpub(id string) error {
+	lock := s.getBookLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
 	name, err := fromID(id)
 	if err != nil {
 		return err
 	}
 	filePath := filepath.Join(editDir, name)
+
+	pendingJobsMu.Lock()
+	delete(pendingJobs, id)
+	delete(pendingPaths, id)
+	pendingJobsMu.Unlock()
+
+	zipReaderCacheMu.Lock()
+	if cVal, ok := zipReaderCache[id]; ok {
+		_ = cVal.reader.Close()
+		delete(zipReaderCache, id)
+	}
+	zipReaderCacheMu.Unlock()
+
+	bookCacheMu.Lock()
+	for k := range bookCache {
+		if k.path == filePath {
+			delete(bookCache, k)
+		}
+	}
+	bookCacheMu.Unlock()
+
+	overlayVersionsMu.Lock()
+	delete(overlayVersions, id)
+	delete(overlayStructureVersions, id)
+	overlayVersionsMu.Unlock()
+
+	lastZippedMu.Lock()
+	delete(lastZipped, id)
+	lastZippedMu.Unlock()
+
+	zipWriteLocksMu.Lock()
+	delete(zipWriteLocks, id)
+	zipWriteLocksMu.Unlock()
+
+	overlayDir := filepath.Join(editDir, ".overlay", id)
+	_ = os.RemoveAll(overlayDir)
 
 	s.bookMu.Lock()
 	if s.locks != nil {
@@ -470,12 +558,310 @@ func (s *Service) DeleteEpub(id string) error {
 	}
 	s.bookMu.Unlock()
 
-	err = os.Remove(filePath)
+	err = removeFileWithRetry(filePath)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
-	_ = os.Remove(filePath + ".bak")
-	_ = os.Remove(filePath + ".tmp")
+	s.clearUndoStack(id)
+	_ = removeFileWithRetry(filePath + ".bak")
+	_ = removeFileWithRetry(filePath + ".tmp")
+	return nil
+}
+
+func (s *Service) RenameEpub(id string, newName string) (EpubFile, error) {
+	lock := s.getBookLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	oldName, err := fromID(id)
+	if err != nil {
+		return EpubFile{}, err
+	}
+
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return EpubFile{}, errors.New("new EPUB name is required")
+	}
+	if !strings.HasSuffix(strings.ToLower(newName), ".epub") {
+		newName += ".epub"
+	}
+	newName = sanitizeFileName(newName)
+	if !strings.HasSuffix(strings.ToLower(newName), ".epub") {
+		newName += ".epub"
+	}
+	if newName == ".epub" {
+		return EpubFile{}, errors.New("invalid EPUB name")
+	}
+
+	oldPath := filepath.Join(editDir, oldName)
+	newPath := filepath.Join(editDir, newName)
+	newID := toID(newName)
+
+	if oldName != newName {
+		if !strings.EqualFold(oldPath, newPath) {
+			if _, err := os.Stat(newPath); err == nil {
+				return EpubFile{}, errors.New("target EPUB already exists")
+			} else if !os.IsNotExist(err) {
+				return EpubFile{}, err
+			}
+		}
+
+		pendingJobsMu.Lock()
+		isPending := pendingJobs[id]
+		pendingJobsMu.Unlock()
+		if isPending {
+			_ = s.consolidateZIP(id, oldPath)
+		}
+
+		zipReaderCacheMu.Lock()
+		if cVal, ok := zipReaderCache[id]; ok {
+			_ = cVal.reader.Close()
+			delete(zipReaderCache, id)
+		}
+		zipReaderCacheMu.Unlock()
+
+		bookCacheMu.Lock()
+		for k := range bookCache {
+			if k.path == oldPath {
+				delete(bookCache, k)
+			}
+		}
+		bookCacheMu.Unlock()
+
+		oldOverlay := filepath.Join(editDir, ".overlay", id)
+		newOverlay := filepath.Join(editDir, ".overlay", newID)
+		if _, err := os.Stat(oldOverlay); err == nil {
+			_ = renameFileWithRetry(oldOverlay, newOverlay)
+		}
+
+		overlayVersionsMu.Lock()
+		if v, ok := overlayVersions[id]; ok {
+			overlayVersions[newID] = v
+			delete(overlayVersions, id)
+		}
+		if sv, ok := overlayStructureVersions[id]; ok {
+			overlayStructureVersions[newID] = sv
+			delete(overlayStructureVersions, id)
+		}
+		overlayVersionsMu.Unlock()
+
+		lastZippedMu.Lock()
+		if lz, ok := lastZipped[id]; ok {
+			lastZipped[newID] = lz
+			delete(lastZipped, id)
+		}
+		lastZippedMu.Unlock()
+
+		if err := renameFileWithRetry(oldPath, newPath); err != nil {
+			return EpubFile{}, err
+		}
+		_ = removeFileWithRetry(oldPath + ".tmp")
+		_ = renameFileWithRetry(oldPath+".bak", newPath+".bak")
+	}
+
+	info, err := os.Stat(newPath)
+	if err != nil {
+		return EpubFile{}, err
+	}
+
+	s.bookMu.Lock()
+	if s.locks != nil {
+		delete(s.locks, id)
+	}
+	s.bookMu.Unlock()
+
+	if id != newID {
+		s.moveUndoStack(id, newID)
+	}
+
+	return EpubFile{
+		ID:   newID,
+		Name: newName,
+		Size: info.Size(),
+	}, nil
+}
+
+func removeFileWithRetry(path string) error {
+	var err error
+	for i := 0; i < 5; i++ {
+		err = os.Remove(path)
+		if err == nil || os.IsNotExist(err) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return err
+}
+
+func renameFileWithRetry(oldPath, newPath string) error {
+	var err error
+	for i := 0; i < 5; i++ {
+		err = os.Rename(oldPath, newPath)
+		if err == nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return err
+}
+
+func (s *Service) UndoStatus(id string) (models.UndoStatus, error) {
+	if _, err := fromID(id); err != nil {
+		return models.UndoStatus{}, err
+	}
+	s.undoMu.Lock()
+	defer s.undoMu.Unlock()
+	count := len(s.undoStacks[id])
+	return models.UndoStatus{CanUndo: count > 0, Count: count}, nil
+}
+
+func (s *Service) Undo(id string) (BookAnalysis, error) {
+	lock := s.getBookLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	name, err := fromID(id)
+	if err != nil {
+		return BookAnalysis{}, err
+	}
+	filePath := filepath.Join(editDir, name)
+
+	snapshotPath, err := s.peekUndoSnapshot(id)
+	if err != nil {
+		return BookAnalysis{}, err
+	}
+
+	tmp := filePath + ".undo.tmp"
+	if err := copyFile(snapshotPath, tmp); err != nil {
+		_ = os.Remove(tmp)
+		return BookAnalysis{}, err
+	}
+	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+		_ = os.Remove(tmp)
+		return BookAnalysis{}, err
+	}
+	if err := os.Rename(tmp, filePath); err != nil {
+		_ = os.Remove(tmp)
+		return BookAnalysis{}, err
+	}
+	s.popUndoSnapshot(id, snapshotPath)
+
+	ctx, err := loadBook(id)
+	if err != nil {
+		return BookAnalysis{}, err
+	}
+	defer ctx.Close()
+	return ctx.Analysis(), nil
+}
+
+const maxUndoSnapshotsPerBook = 20
+
+func (s *Service) pushUndoSnapshot(id string) error {
+	// Temporarily disabled to speed up file saving
+	return nil
+
+	name, err := fromID(id)
+	if err != nil {
+		return err
+	}
+	filePath := filepath.Join(editDir, name)
+	if _, err := os.Stat(filePath); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(undoDir, 0755); err != nil {
+		return err
+	}
+
+	snapshotName := sanitizeFileNameLimit(strings.TrimSuffix(name, filepath.Ext(name)), 80) + "-" + randomID() + ".epub"
+	snapshotPath := filepath.Join(undoDir, snapshotName)
+	if err := copyFile(filePath, snapshotPath); err != nil {
+		_ = os.Remove(snapshotPath)
+		return err
+	}
+
+	s.undoMu.Lock()
+	defer s.undoMu.Unlock()
+	stack := append(s.undoStacks[id], snapshotPath)
+	for len(stack) > maxUndoSnapshotsPerBook {
+		_ = os.Remove(stack[0])
+		stack = stack[1:]
+	}
+	s.undoStacks[id] = stack
+	return nil
+}
+
+func (s *Service) peekUndoSnapshot(id string) (string, error) {
+	s.undoMu.Lock()
+	defer s.undoMu.Unlock()
+	stack := s.undoStacks[id]
+	if len(stack) == 0 {
+		return "", errors.New("không có thay đổi nào để hoàn tác cho cuốn sách này")
+	}
+	return stack[len(stack)-1], nil
+}
+
+func (s *Service) popUndoSnapshot(id string, snapshotPath string) {
+	s.undoMu.Lock()
+	defer s.undoMu.Unlock()
+	stack := s.undoStacks[id]
+	if len(stack) == 0 {
+		return
+	}
+	if stack[len(stack)-1] == snapshotPath {
+		stack = stack[:len(stack)-1]
+		_ = os.Remove(snapshotPath)
+	}
+	if len(stack) == 0 {
+		delete(s.undoStacks, id)
+		return
+	}
+	s.undoStacks[id] = stack
+}
+
+func (s *Service) clearUndoStack(id string) {
+	s.undoMu.Lock()
+	defer s.undoMu.Unlock()
+	for _, snapshotPath := range s.undoStacks[id] {
+		_ = os.Remove(snapshotPath)
+	}
+	delete(s.undoStacks, id)
+}
+
+func (s *Service) moveUndoStack(oldID string, newID string) {
+	s.undoMu.Lock()
+	defer s.undoMu.Unlock()
+	if oldID == newID {
+		return
+	}
+	stack := s.undoStacks[oldID]
+	if len(stack) == 0 {
+		return
+	}
+	s.undoStacks[newID] = append(s.undoStacks[newID], stack...)
+	delete(s.undoStacks, oldID)
+}
+
+func copyFile(src string, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(dst)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(dst)
+		return closeErr
+	}
 	return nil
 }

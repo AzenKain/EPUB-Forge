@@ -312,10 +312,18 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 		return "", fmt.Errorf("lỗi đóng file: %w", err)
 	}
 
-	id := toID(outputName)
-	_, _ = s.Repair(id, []string{"FIX_XHTML", "CLEAN_BROKEN_CONTENT_LINKS"})
+	if err := s.repairCreatedEpub(outputName); err != nil {
+		_ = removeFileWithRetry(outputPath)
+		return "", fmt.Errorf("không thể tự sửa EPUB sau khi tạo: %w", err)
+	}
 
 	return outputName, nil
+}
+
+func (s *Service) repairCreatedEpub(outputName string) error {
+	id := toID(outputName)
+	_, err := s.Repair(id, []string{"FIX_XHTML", "CLEAN_BROKEN_CONTENT_LINKS"})
+	return err
 }
 
 func uniqueCreateOutputPath(title string) (string, string) {
