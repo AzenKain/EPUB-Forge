@@ -111,6 +111,11 @@ npm run native
 
 You can write custom Javascript crawler extensions to scrape external sites and automatically generate EPUB books.
 
+Built-in origin extensions currently include:
+- `hako2epub`: DocLN/Hako crawler with login support and one EPUB per source volume.
+- `jukaza2epub`: Jukaza crawler with reader API decryption.
+- `valvrareteam2epub`: Valvrareteam crawler, reading Next.js module data and exporting each source volume as a separate EPUB. Optional account login unlocks protected chapters through the full-content API; chapters still inaccessible after login are kept as placeholder entries instead of stopping the whole run.
+
 For full developer instructions on extension structure, inputs schema, browser control APIs, and return format, see the [Extension Developer Guide](file:///e:/epub_forge/EXTENSION_GUIDE.md).
 
 ---
@@ -119,6 +124,8 @@ For full developer instructions on extension structure, inputs schema, browser c
 
 To assist future AI agents (GPT, Claude, Gemini) and developers in maintaining this repository, we have established a dedicated docs folder with the following reference materials:
 
+- **[User Guide](file:///e:/epub_forge/docs/user-guide.md)**: Hướng dẫn sử dụng toàn bộ ứng dụng EPUBForge, bao gồm quản lý sách, sửa EPUB, tách/gộp volume, tạo EPUB, extension, tối ưu, sửa lỗi và cập nhật app.
+- **[Beginner User Guide](file:///e:/epub_forge/docs/user-guide-basic.md)**: Bản hướng dẫn ngắn, dễ đọc cho người dùng phổ thông, có ảnh chụp giao diện minh họa.
 - **[Project Architecture Guide](file:///e:/epub_forge/docs/architecture.md)**: Cấu trúc thư mục, thiết kế module Backend Go & Frontend React, và sơ đồ giao tiếp dữ liệu.
 - **[Performance Optimizations](file:///e:/epub_forge/docs/optimizations.md)**: Chi tiết cơ chế Overlay Cache, Background Threading, Reader caching, và các giải pháp chống nghẽn I/O.
 - **[Coding & AI Guidelines](file:///e:/epub_forge/docs/guidelines.md)**: Quy chuẩn viết code, phòng tránh lỗi ZIP Lock/Directory và hướng dẫn chạy benchmark kiểm thử.

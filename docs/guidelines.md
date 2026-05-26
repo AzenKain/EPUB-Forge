@@ -78,6 +78,7 @@ This guide details strict development standards, architectural rules, coding pat
 - **Multi-volume Return Shape**: When one source URL contains multiple volumes, do not flatten every chapter into one ebook. Return one ebook per selected volume using Format B (`[...]`) or Format C (`{ ebooks: [...] }`) from `EXTENSION_GUIDE.md`.
 - **Volume Metadata**: For each volume ebook, use the source volume heading as `title` and `metadata.title`. Put the parent novel/series title in `metadata.series`, and put the volume order in `metadata.seriesIndex`.
 - **Image-only Chapters**: Illustration/gallery pages with `<img>` but little or no text are valid chapters. Preserve the HTML, download images into the ebook `images` map, and do not reject the page solely because `htmlToText(content)` is short.
+- **Next.js Novel Sites**: For sites like Valvrareteam where the visible DOM may omit locked chapters, prefer the server-rendered React/Next flight data for module and chapter grouping, then map or synthesize chapter URLs from stable chapter IDs. If the site exposes an authenticated full-content API, add optional username/password inputs and fetch protected content with a Bearer token; only keep a clear placeholder or skip the chapter when authenticated access still returns no public content.
 - For full schema definitions of the extension format, browser helper APIs, and parameter configurations, refer to the root [EXTENSION_GUIDE.md](file:///e:/epub_forge/EXTENSION_GUIDE.md).
 
 ---
