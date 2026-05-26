@@ -14,7 +14,8 @@ import {
   Eraser,
   FileCode,
   Eye,
-  Sparkles
+  Sparkles,
+  Info
 } from "lucide-react";
 
 type Props = {
@@ -551,6 +552,55 @@ export function EditChapterModal({
     document.execCommand(command, false, value);
     visualEditorRef.current?.focus();
     window.setTimeout(() => setActiveAlign(detectEditorAlignment(visualEditorRef.current)), 0);
+  };
+
+  const handleInsertFootnote = () => {
+    const noteText = prompt("Nhập nội dung chú thích/giải nghĩa:");
+    if (!noteText || !noteText.trim()) return;
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      alert("Vui lòng chọn hoặc đặt con trỏ chuột tại vị trí muốn chèn chú thích.");
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const id = "fn-" + Date.now();
+
+    const link = document.createElement("a");
+    link.setAttribute("epub:type", "noteref");
+    link.setAttribute("href", `#${id}`);
+    link.style.verticalAlign = "super";
+    link.style.fontSize = "75%";
+    link.style.textDecoration = "none";
+    link.style.color = "#2f7d69";
+    link.style.fontWeight = "bold";
+    link.textContent = range.toString() || "[*]";
+
+    range.deleteContents();
+    range.insertNode(link);
+
+    if (visualEditorRef.current) {
+      const aside = document.createElement("aside");
+      aside.setAttribute("epub:type", "footnote");
+      aside.setAttribute("id", id);
+      aside.style.display = "block";
+      aside.style.fontSize = "85%";
+      aside.style.color = "#687168";
+      aside.style.marginTop = "1.5em";
+      aside.style.paddingTop = "0.5em";
+      aside.style.borderTop = "1px dashed #c9c6bd";
+      
+      const p = document.createElement("p");
+      p.style.margin = "0";
+      p.innerHTML = `<strong>[*Chú thích]:</strong> ${noteText.trim()}`;
+      aside.appendChild(p);
+
+      visualEditorRef.current.appendChild(aside);
+      
+      setActiveAlign(detectEditorAlignment(visualEditorRef.current));
+      syncVisualToRaw();
+    }
   };
 
   const handleSave = async () => {
@@ -1168,6 +1218,16 @@ export function EditChapterModal({
                       >
                         <Sparkles size={14} style={{ marginRight: "4px" }} />
                         <span>Dọn dẹp chương</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="toolbar-btn"
+                        onClick={handleInsertFootnote}
+                        title="Chèn chú thích (Footnote)"
+                        style={{ width: "auto", padding: "0 8px", fontSize: "11px", fontWeight: "bold" }}
+                      >
+                        <Info size={14} style={{ marginRight: "4px" }} />
+                        <span>Chú thích</span>
                       </button>
                       <button
                         type="button"

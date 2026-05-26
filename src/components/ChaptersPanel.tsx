@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { Edit2, Trash2, Combine, Scissors, X, Plus } from "lucide-react";
 import type { Chapter } from "../lib/types";
+import { AutoMergeModal } from "./AutoMergeModal";
 
 type Props = {
   bookId: string;
@@ -24,7 +25,9 @@ export function ChaptersPanel({
   const [isMultiSelect, setIsMultiSelect] = useState(false);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [isAutoMergeOpen, setIsAutoMergeOpen] = useState(false);
   const [customTitle, setCustomTitle] = useState("");
+  const [stripMergedTitles, setStripMergedTitles] = useState(true);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [dropPosition, setDropPosition] = useState<"before" | "after">("before");
@@ -160,7 +163,8 @@ export function ChaptersPanel({
         body: JSON.stringify({
           action: "merge",
           mergeIndices: selectedIndices,
-          newTitle: customTitle.trim()
+          newTitle: customTitle.trim(),
+          stripMergedTitles: stripMergedTitles
         })
       });
       if (!res.ok) {
@@ -290,17 +294,32 @@ export function ChaptersPanel({
 
   return (
     <section className={isReordering ? "panel chaptersPanel reordering" : "panel chaptersPanel"}>
-      <div className="panelHeader">
-        <h3>Danh sách chương</h3>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span>{chapters.length} chương</span>
+      <div className="panelHeader" style={{ flexDirection: "column", alignItems: "stretch", gap: "8px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+          <h3>Danh sách chương</h3>
+          <span style={{ color: "#687168", fontSize: "12px", whiteSpace: "nowrap", flexShrink: 0 }}>{chapters.length} chương</span>
+        </div>
+        <div style={{ display: "flex", flexWrap: "nowrap", gap: "6px", justifyContent: "flex-end", width: "100%", minWidth: 0 }}>
+          {!isMultiSelect && (
+            <button
+              type="button"
+              className="smallButton"
+              onClick={() => setIsAutoMergeOpen(true)}
+              disabled={isReordering}
+              title="Quét gộp tự động"
+              style={{ width: "96px", padding: "0 8px", height: "32px", fontSize: "11px", gap: "4px", flex: "0 0 auto" }}
+            >
+              <Combine size={11} />
+              <span>Quét gộp</span>
+            </button>
+          )}
           {!isMultiSelect && (
             <button
               type="button"
               className="smallButton strong"
               onClick={handleAddChapter}
               disabled={isReordering}
-              style={{ padding: "0 8px", height: "24px", fontSize: "11px", gap: "4px" }}
+              style={{ width: "68px", padding: "0 8px", height: "32px", fontSize: "11px", gap: "4px", flex: "0 0 auto" }}
             >
               <Plus size={11} />
               <span>Thêm</span>
@@ -314,9 +333,10 @@ export function ChaptersPanel({
               setIsMultiSelect(!isMultiSelect);
               setSelectedIndices([]);
             }}
-            style={{ padding: "0 8px", height: "24px", fontSize: "11px" }}
+            title={isMultiSelect ? "Hủy chọn" : "Chọn nhiều"}
+            style={{ width: "68px", padding: "0 8px", height: "32px", fontSize: "11px", flex: "0 0 auto" }}
           >
-            {isMultiSelect ? "Hủy chọn" : "Chọn nhiều"}
+            {isMultiSelect ? "Hủy" : "Chọn"}
           </button>
           {isMultiSelect && selectedIndices.length >= 2 && (
             <button
@@ -324,7 +344,7 @@ export function ChaptersPanel({
               className="smallButton strong"
               onClick={handleOpenMultiMerge}
               disabled={isReordering}
-              style={{ padding: "0 8px", height: "24px", fontSize: "11px", gap: "4px" }}
+              style={{ width: "86px", padding: "0 8px", height: "32px", fontSize: "11px", gap: "4px", flex: "0 0 auto" }}
             >
               <Combine size={11} />
               <span>Gộp ({selectedIndices.length})</span>
@@ -336,7 +356,7 @@ export function ChaptersPanel({
               className="smallButton danger"
               onClick={handleDeleteMultiple}
               disabled={isReordering}
-              style={{ padding: "0 8px", height: "24px", fontSize: "11px", gap: "4px" }}
+              style={{ width: "82px", padding: "0 8px", height: "32px", fontSize: "11px", gap: "4px", flex: "0 0 auto" }}
             >
               <Trash2 size={11} />
               <span>Xoá ({selectedIndices.length})</span>
@@ -642,6 +662,19 @@ export function ChaptersPanel({
                   autoFocus
                 />
               </div>
+
+              <div className="field" style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "12px", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  id="stripMergedTitles"
+                  checked={stripMergedTitles}
+                  onChange={(e) => setStripMergedTitles(e.target.checked)}
+                  style={{ width: "auto", height: "auto", cursor: "pointer" }}
+                />
+                <label htmlFor="stripMergedTitles" style={{ fontSize: "12px", color: "#17201c", cursor: "pointer", userSelect: "none" }}>
+                  Tự động xoá tiêu đề chương phụ trong nội dung gộp
+                </label>
+              </div>
             </div>
 
             <footer className="modalFooter">
@@ -659,6 +692,17 @@ export function ChaptersPanel({
             </footer>
           </section>
         </div>
+      )}
+      {isAutoMergeOpen && (
+        <AutoMergeModal
+          open={isAutoMergeOpen}
+          bookId={bookId}
+          chapters={chapters}
+          onClose={() => setIsAutoMergeOpen(false)}
+          onUpdateAnalysis={onUpdateAnalysis}
+          onSetBusy={onSetBusy}
+          onSetError={onSetError}
+        />
       )}
     </section>
   );

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Settings, Type, Sparkles, Search, Wrench, Image as ImageIcon, Undo2 } from "lucide-react";
+import { Settings, Type, Sparkles, Search, Wrench, Image as ImageIcon, Undo2, List } from "lucide-react";
 import { BookSidebar } from "./components/BookSidebar";
 import { ChaptersPanel } from "./components/ChaptersPanel";
 import { MetadataModal } from "./components/MetadataModal";

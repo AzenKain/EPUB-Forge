@@ -64,6 +64,7 @@ Contains the heart of the EPUB engine. Below is a detailed description of each s
   - Manages `zipReaderCache` to keep reader handles open across calls.
 - **[chapter.go](file:///e:/epub_forge/internal/service/chapter.go)**:
   - Manages all chapter-level mutations: editing HTML, adding new chapters, reordering the spine, renaming, and deleting chapters.
+  - Chapter merge operations update OPF spine, NCX TOC, EPUB3 `nav.xhtml`, and visible TOC pages such as `Text/index.html` together. Smart auto-merge calls the same `action: "merge"` endpoint per group, then posts one final `/toc` update from the planned merged spine so old flat-TOC EPUBs stay consistent after batch merges.
   - Implements the **Overlay Filesystem Cache** (`edit/.overlay/{id}/`) and **Background Asynchronous ZIP writer**.
   - Implements Vietnamese typography normalization (spacing, smart quotes, tone placements).
 - **[gallery.go](file:///e:/epub_forge/internal/service/gallery.go)**:

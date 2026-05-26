@@ -100,6 +100,7 @@ type ChapterEditRequest struct {
 	SmartQuotes         bool     `json:"smartQuotes,omitempty"`
 	NormalizeTones      bool     `json:"normalizeTones,omitempty"`
 	FixSpacing          bool     `json:"fixSpacing,omitempty"`
+	StripMergedTitles   bool     `json:"stripMergedTitles,omitempty"`
 }
 
 type MergeEpubsRequest struct {
@@ -269,4 +270,10 @@ type UpdateProgressResponse struct {
 	Status  string `json:"status"`
 	Percent int    `json:"percent"`
 	Error   string `json:"error"`
+}
+
+type TocNode struct {
+	Title    string    `json:"title"`
+	Href     string    `json:"href"`
+	Children []TocNode `json:"children,omitempty"`
 }

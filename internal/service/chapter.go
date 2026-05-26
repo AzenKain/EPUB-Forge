@@ -65,7 +65,7 @@ func (s *Service) EditChapters(id string, req ChapterEditRequest) (BookAnalysis,
 	if err := s.pushUndoSnapshot(id); err != nil {
 		return BookAnalysis{}, err
 	}
-	newFileName, err := ctx.EditChapters(req.Action, req.Index, req.TargetIndex, req.NewTitle, req.Content, req.MergeIndices)
+	newFileName, err := ctx.EditChapters(req.Action, req.Index, req.TargetIndex, req.NewTitle, req.Content, req.MergeIndices, req.StripMergedTitles)
 	if err != nil {
 		return BookAnalysis{}, err
 	}
@@ -435,7 +435,7 @@ func applySpacingNormalization(text string) string {
 	return string(result)
 }
 
-func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, newTitle string, content string, mergeIndices []int) (string, error) {
+func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, newTitle string, content string, mergeIndices []int, stripMergedTitles bool) (string, error) {
 	if index < 0 || index >= len(ctx.Chapters) {
 		return "", errors.New("invalid chapter index")
 	}
@@ -456,7 +456,7 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 	var navPath string
 	var navHTML string
 	for _, item := range ctx.Manifest {
-		if strings.Contains(strings.ToLower(item.MediaType), "properties") && strings.Contains(strings.ToLower(item.Attrs["properties"]), "nav") {
+		if strings.Contains(strings.ToLower(item.Attrs["properties"]), "nav") {
 			navPath = item.FullPath
 			var err error
 			navHTML, err = ctx.readText(navPath)
@@ -768,11 +768,17 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 			if err != nil {
 				return "", fmt.Errorf("không thể đọc chương %d: %w", mergeIndices[0], err)
 			}
+			if stripMergedTitles {
+				currentHTML = replaceChapterTitle(currentHTML, ctx.Chapters[mergeIndices[0]].Title, mergedTitle)
+			}
 			for i := 1; i < len(mergeIndices); i++ {
 				nextIdx := mergeIndices[i]
 				htmlNext, err := ctx.readText(ctx.Chapters[nextIdx].Path)
 				if err != nil {
 					return "", fmt.Errorf("không thể đọc chương %d: %w", nextIdx, err)
+				}
+				if stripMergedTitles {
+					htmlNext = stripChapterTitle(htmlNext, ctx.Chapters[nextIdx].Title)
 				}
 				currentHTML = mergeHTML(currentHTML, htmlNext)
 			}
@@ -786,6 +792,10 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 			htmlB, err := ctx.readText(chB.Path)
 			if err != nil {
 				return "", fmt.Errorf("không thể đọc chương B: %w", err)
+			}
+			if stripMergedTitles {
+				htmlA = replaceChapterTitle(htmlA, chA.Title, mergedTitle)
+				htmlB = stripChapterTitle(htmlB, chB.Title)
 			}
 			currentHTML = mergeHTML(htmlA, htmlB)
 		}
@@ -1175,9 +1185,156 @@ func mergeHTML(htmlA, htmlB string) string {
 	return htmlA[:bodyAEnd] + "\n" + innerB + "\n" + htmlA[bodyAEnd:]
 }
 
+func stripChapterTitle(htmlContent string, chapterTitle string) string {
+	bodyStartMatch := regexp.MustCompile(`(?i)<body[^>]*>`).FindStringIndex(htmlContent)
+	bodyEndMatch := regexp.MustCompile(`(?i)</body>`).FindStringIndex(htmlContent)
+	if bodyStartMatch == nil || bodyEndMatch == nil {
+		return stripChapterTitleFromContent(htmlContent, chapterTitle)
+	}
+	header := htmlContent[:bodyStartMatch[1]]
+	body := htmlContent[bodyStartMatch[1]:bodyEndMatch[0]]
+	footer := htmlContent[bodyEndMatch[0]:]
+	return header + stripChapterTitleFromContent(body, chapterTitle) + footer
+}
+
+func stripChapterTitleFromContent(bodyContent string, chapterTitle string) string {
+	cleanTarget := strings.ToLower(strings.TrimSpace(chapterTitle))
+	if cleanTarget == "" {
+		return bodyContent
+	}
+
+	searchLimit := 1500
+	if len(bodyContent) < searchLimit {
+		searchLimit = len(bodyContent)
+	}
+	prefix := bodyContent[:searchLimit]
+
+	var bestStart = -1
+	var bestEnd = -1
+	var innerText string
+
+	// Check h1-h6, p, div tags (with or without class)
+	candidateTags := []string{"h1", "h2", "h3", "h4", "h5", "h6", "p", "div"}
+	for _, tag := range candidateTags {
+		reStr := fmt.Sprintf(`(?is)<%s\b[^>]*>(.*?)</%s\s*>`, tag, tag)
+		re := regexp.MustCompile(reStr)
+		if loc := re.FindStringSubmatchIndex(prefix); loc != nil {
+			start := loc[0]
+			end := loc[1]
+			text := prefix[loc[2]:loc[3]]
+			if bestStart == -1 || start < bestStart {
+				bestStart = start
+				bestEnd = end
+				innerText = text
+			}
+		}
+	}
+
+	var matchIdx []int
+	if bestStart != -1 {
+		matchIdx = []int{bestStart, bestEnd}
+	}
+
+	if matchIdx != nil {
+		plainText := strings.ToLower(strings.TrimSpace(stripHTMLTags(innerText)))
+
+		isMatch := false
+		if plainText == cleanTarget {
+			isMatch = true
+		} else if len(plainText) > 3 && len(cleanTarget) > 3 {
+			if strings.Contains(plainText, cleanTarget) || strings.Contains(cleanTarget, plainText) {
+				isMatch = true
+			}
+		}
+
+		if isMatch {
+			start := matchIdx[0]
+			end := matchIdx[1]
+			return bodyContent[:start] + bodyContent[end:]
+		}
+	}
+
+	return bodyContent
+}
+
 func stripHTMLTags(s string) string {
 	re := regexp.MustCompile(`<[^>]*>`)
 	return html.UnescapeString(re.ReplaceAllString(s, ""))
+}
+
+func replaceChapterTitle(htmlContent string, oldTitle string, newTitle string) string {
+	bodyStartMatch := regexp.MustCompile(`(?i)<body[^>]*>`).FindStringIndex(htmlContent)
+	bodyEndMatch := regexp.MustCompile(`(?i)</body>`).FindStringIndex(htmlContent)
+	if bodyStartMatch == nil || bodyEndMatch == nil {
+		return replaceChapterTitleInContent(htmlContent, oldTitle, newTitle)
+	}
+	header := htmlContent[:bodyStartMatch[1]]
+	body := htmlContent[bodyStartMatch[1]:bodyEndMatch[0]]
+	footer := htmlContent[bodyEndMatch[0]:]
+	return header + replaceChapterTitleInContent(body, oldTitle, newTitle) + footer
+}
+
+func replaceChapterTitleInContent(bodyContent string, oldTitle string, newTitle string) string {
+	cleanTarget := strings.ToLower(strings.TrimSpace(oldTitle))
+	if cleanTarget == "" {
+		return bodyContent
+	}
+
+	searchLimit := 1500
+	if len(bodyContent) < searchLimit {
+		searchLimit = len(bodyContent)
+	}
+	prefix := bodyContent[:searchLimit]
+
+	var bestStart = -1
+	var bestEnd = -1
+	var innerText string
+	var tagType string
+	var tagAttrs string
+
+	candidateTags := []string{"h1", "h2", "h3", "h4", "h5", "h6", "p", "div"}
+	for _, tag := range candidateTags {
+		reStr := fmt.Sprintf(`(?is)<%s\b([^>]*?)>(.*?)</%s\s*>`, tag, tag)
+		re := regexp.MustCompile(reStr)
+		if loc := re.FindStringSubmatchIndex(prefix); loc != nil {
+			start := loc[0]
+			end := loc[1]
+			attrs := prefix[loc[2]:loc[3]]
+			text := prefix[loc[4]:loc[5]]
+			if bestStart == -1 || start < bestStart {
+				bestStart = start
+				bestEnd = end
+				innerText = text
+				tagType = tag
+				tagAttrs = attrs
+			}
+		}
+	}
+
+	if bestStart != -1 {
+		plainText := strings.ToLower(strings.TrimSpace(stripHTMLTags(innerText)))
+
+		isMatch := false
+		if plainText == cleanTarget {
+			isMatch = true
+		} else if len(plainText) > 3 && len(cleanTarget) > 3 {
+			if strings.Contains(plainText, cleanTarget) || strings.Contains(cleanTarget, plainText) {
+				isMatch = true
+			}
+		}
+
+		if isMatch {
+			var newTag string
+			if tagAttrs != "" {
+				newTag = fmt.Sprintf("<%s%s>%s</%s>", tagType, tagAttrs, html.EscapeString(newTitle), tagType)
+			} else {
+				newTag = fmt.Sprintf("<%s>%s</%s>", tagType, html.EscapeString(newTitle), tagType)
+			}
+			return bodyContent[:bestStart] + newTag + bodyContent[bestEnd:]
+		}
+	}
+
+	return fmt.Sprintf("<h1>%s</h1>\n%s", html.EscapeString(newTitle), bodyContent)
 }
 
 func reorderedChapters(chapters []models.Chapter, source, targetInsertion int) ([]models.Chapter, int) {

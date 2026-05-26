@@ -761,7 +761,7 @@ func (s *Service) Undo(id string) (BookAnalysis, error) {
 const maxUndoSnapshotsPerBook = 20
 
 func (s *Service) pushUndoSnapshot(id string) error {
-	// Temporarily disabled to speed up file saving
+
 	return nil
 
 	name, err := fromID(id)

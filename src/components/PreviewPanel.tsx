@@ -599,7 +599,7 @@ export function PreviewPanel({
             aria-modal="true"
             onMouseDown={(e) => e.stopPropagation()}
             style={{
-              width: "min(680px, 95vw)",
+              width: "min(1360px, 96vw)",
               height: "95vh",
               display: "flex",
               flexDirection: "column",

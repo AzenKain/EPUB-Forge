@@ -284,6 +284,21 @@ func (c *Controller) Epub(w http.ResponseWriter, r *http.Request) {
 		}
 		res, err := c.service.Validate(id)
 		utils.WriteJSON(w, res, err)
+	case len(parts) == 2 && parts[1] == "toc":
+		if r.Method == http.MethodGet {
+			nodes, err := c.service.GetTOCNodes(id)
+			utils.WriteJSON(w, nodes, err)
+		} else if r.Method == http.MethodPost {
+			var nodes []models.TocNode
+			if err := json.NewDecoder(r.Body).Decode(&nodes); err != nil {
+				utils.WriteError(w, err)
+				return
+			}
+			analysis, err := c.service.UpdateTOC(id, nodes)
+			utils.WriteJSON(w, analysis, err)
+		} else {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
 	case len(parts) == 2 && parts[1] == "find":
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)

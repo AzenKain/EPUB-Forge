@@ -58,6 +58,14 @@ This guide details strict development standards, architectural rules, coding pat
 - **Issue**: Creating undo snapshots copies the entire EPUB file, which is too slow for large books.
 - **Rule**: Keep the early return (`return nil`) pattern inside `pushUndoSnapshot` active. Do not delete the undo logic, as it may be toggled or re-enabled later.
 
+### 6. Chapter Merge and TOC Consistency
+- Manual merge and smart auto-merge both use `POST /api/epubs/{id}/chapters/edit` with `action: "merge"`.
+- Smart auto-merge should post one final `POST /api/epubs/{id}/toc` request after all selected groups finish. Build that TOC from the original spine, removing secondary fragments and replacing each primary fragment title with the selected merged title.
+- Keep per-group NCX and EPUB3 nav updates inside `internal/service/chapter.go`; the final smart-merge `/toc` update exists to make batch merges robust for older flat-TOC EPUBs.
+- `UpdateTOC` must update NCX, EPUB3 nav, and visible TOC pages (`index.html`, `index.xhtml`, `toc.html`, `toc.xhtml`) so reader-facing table-of-contents pages do not keep stale split chapter links or dates.
+- When detecting an EPUB3 navigation document, check the manifest item's `properties` attribute for the `nav` token. Do not check `media-type` for `properties`.
+- Smart merge detection should group split chapter labels by the base chapter number (`Chuong 5`) rather than the subtitle text, because source EPUBs often contain minor OCR/typing differences between fragments.
+
 ---
 
 ## 🔌 JS Scraper Extensions Guidelines

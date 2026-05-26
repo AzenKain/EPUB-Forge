@@ -41,7 +41,6 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
   const [choicePrompt, setChoicePrompt] = useState<ChoicePrompt | null>(null);
   const [choiceSelection, setChoiceSelection] = useState<string[]>([]);
 
-  // Store tab state
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("installed");
   const [storeExtensions, setStoreExtensions] = useState<StoreExtensionInfo[]>([]);
   const [storeLoading, setStoreLoading] = useState(false);

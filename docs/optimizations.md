@@ -35,6 +35,7 @@ EPUBForge contains advanced performance optimizations specifically designed to h
   - **Debouncing**: A 2-second sleep debounce timer is introduced. Multiple saves within 2 seconds reschedule the task, executing a single write.
   - **Serialization**: A per-book mutex (`zipWriteLocks`) ensures only one background ZIP consolidation executes per book at any given time.
   - **Deduplication**: If a write finishes, `lastZipped` is updated. If no new overlay changes occurred during execution, any redundant queued builds are immediately skipped.
+  - **Structural merge edits**: Chapter merges write the merged XHTML plus OPF/NCX/nav changes into the overlay in one request. Smart auto-merge performs one additional final TOC overlay write after the batch, including visible TOC pages such as `Text/index.html`, keeping the UI fast while letting the background writer consolidate the real EPUB later.
 
 ### 3. Open Reader Handle Caching (`zipReaderCache`)
 - **Problem**: Opening a 450MB ZIP file requires scanning the Central Directory from disk, parsing headers, and setting up file maps. This takes ~150ms on every request.
