@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/tls"
@@ -68,7 +69,8 @@ type StoreExtensionInfo struct {
 }
 
 func computeMD5(data []byte) string {
-	hash := md5.Sum(data)
+	normalized := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	hash := md5.Sum(normalized)
 	return hex.EncodeToString(hash[:])
 }
 
@@ -780,7 +782,7 @@ func (s *Service) parseExtensionMeta(jsCode string) (ExtensionInfo, error) {
 	return info, nil
 }
 
-const storeAPIURL = "https://api.github.com/repos/AzenKain/EPUB-Forge/contents/extensions"
+const storeAPIURL = "https://api.github.com/repos/AzenKain/EPUB-Forge/contents/extensions/origin"
 
 type githubContentEntry struct {
 	Name        string `json:"name"`
