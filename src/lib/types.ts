@@ -109,9 +109,15 @@ export type ValidationReport = {
 
 export type ExtensionInput = {
   id: string;
-  type: "text" | "number" | "boolean" | "password";
+  type: "text" | "number" | "boolean" | "password" | "select";
   label: string;
   placeholder?: string;
+  options?: Array<{
+    value: string;
+    label: string;
+    description?: string;
+  }>;
+  visibleWhen?: Record<string, string | string[]>;
   defaultValue?: any;
   required?: boolean;
 };

@@ -73,7 +73,6 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
       setSuccess("");
       setLogs([]);
       setSelectedExt(null);
-      setFormData({});
       setActiveRunId(null);
       setShowCaptchaPanel(false);
       setCaptchaScreenshot("");
@@ -149,6 +148,16 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
     setChoicePrompt(null);
     setChoiceSelection([]);
 
+    const saved = localStorage.getItem(`ext_form_${ext.id}`);
+    if (saved) {
+      try {
+        setFormData(JSON.parse(saved));
+        return;
+      } catch (e) {
+        console.error("Lỗi tải dữ liệu lưu trữ:", e);
+      }
+    }
+
     const initialData: Record<string, any> = {};
     if (ext.inputs) {
       ext.inputs.forEach((input) => {
@@ -165,10 +174,24 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
   };
 
   const handleInputChange = (id: string, val: any) => {
-    setFormData((prev) => ({
-      ...prev,
-      [id]: val,
-    }));
+    setFormData((prev) => {
+      const updated = {
+        ...prev,
+        [id]: val,
+      };
+      if (selectedExt) {
+        localStorage.setItem(`ext_form_${selectedExt.id}`, JSON.stringify(updated));
+      }
+      return updated;
+    });
+  };
+
+  const isInputVisible = (input: NonNullable<ExtensionInfo["inputs"]>[number]) => {
+    if (!input.visibleWhen) return true;
+    return Object.entries(input.visibleWhen).every(([fieldId, expected]) => {
+      const current = formData[fieldId];
+      return Array.isArray(expected) ? expected.includes(current) : current === expected;
+    });
   };
 
   const handleUploadClick = () => {
@@ -1513,7 +1536,7 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
 
                 <div className="extFormArea">
                   {/* Render inputs dynamically */}
-                  {selectedExt.inputs && selectedExt.inputs.map((input) => (
+                  {selectedExt.inputs && selectedExt.inputs.filter(isInputVisible).map((input) => (
                     <div key={input.id} className="extFormGroup">
                       {input.type !== "boolean" && (
                         <label>
@@ -1556,6 +1579,22 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
                           disabled={running}
                           required={input.required}
                         />
+                      )}
+
+                      {input.type === "select" && (
+                        <select
+                          className="extInputText"
+                          value={formData[input.id] || ""}
+                          onChange={(e) => handleInputChange(input.id, e.target.value)}
+                          disabled={running}
+                          required={input.required}
+                        >
+                          {(input.options || []).map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
                       )}
 
                       {input.type === "boolean" && (

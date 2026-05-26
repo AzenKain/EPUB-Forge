@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	embeddedextensions "epubforge/extensions"
 	"epubforge/internal/models"
 
 	"github.com/dop251/goja"
@@ -34,6 +35,12 @@ type ExtensionInput struct {
 	Type         string `json:"type"`
 	Label        string `json:"label"`
 	Placeholder  string `json:"placeholder,omitempty"`
+	Options      []struct {
+		Value       string `json:"value"`
+		Label       string `json:"label"`
+		Description string `json:"description,omitempty"`
+	} `json:"options,omitempty"`
+	VisibleWhen map[string]any `json:"visibleWhen,omitempty"`
 	DefaultValue any    `json:"defaultValue,omitempty"`
 	Required     bool   `json:"required"`
 }
@@ -99,7 +106,7 @@ func (s *Service) getBrowser() (*rod.Browser, error) {
 		l = launcher.New()
 	}
 	headless := strings.ToLower(os.Getenv("EPUBFORGE_HEADLESS")) != "false" && os.Getenv("EPUBFORGE_HEADFUL") == ""
-	u := l.Headless(headless).MustLaunch()
+	u := l.Leakless(false).Headless(headless).MustLaunch()
 
 	browser := rod.New().ControlURL(u).MustConnect()
 	s.browser = browser
@@ -108,18 +115,29 @@ func (s *Service) getBrowser() (*rod.Browser, error) {
 }
 
 func (s *Service) Close() {
-	s.activeRunsMu.Lock()
-	defer s.activeRunsMu.Unlock()
-
 	s.FlushAllZipWrites()
 
-	if s.browser != nil {
-		_ = s.browser.Close()
-		s.browser = nil
+	s.activeRunsMu.Lock()
+	for _, run := range s.activeRuns {
+		if run.Cancel != nil {
+			run.Cancel()
+		}
+		if run.Page != nil {
+			_ = run.Page.Close()
+			run.Page = nil
+		}
 	}
-	if s.launcher != nil {
-		s.launcher.Kill()
-		s.launcher = nil
+	browser := s.browser
+	launcher := s.launcher
+	s.browser = nil
+	s.launcher = nil
+	s.activeRunsMu.Unlock()
+
+	if browser != nil {
+		_ = browser.Close()
+	}
+	if launcher != nil {
+		launcher.Kill()
 	}
 }
 
@@ -130,6 +148,7 @@ func (s *Service) NewJSSession(logWriter io.Writer, runID string) (*JSSession, e
 	}
 
 	page := stealth.MustPage(browser)
+	_ = proto.NetworkEnable{}.Call(page)
 	_ = page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{
 		Width:             1024,
 		Height:            768,
@@ -175,16 +194,34 @@ func (s *JSSession) Get(urlStr string, headers map[string]string) (*JSSessionRes
 	}
 
 	fmt.Fprintf(s.logWriter, "[*] Trình duyệt đang tải: %s\n", urlStr)
+	status := 200
+	respHeaders := make(map[string]string)
+	var navMu sync.Mutex
+	responsePage, stopResponseCapture := s.page.WithCancel()
+	defer stopResponseCapture()
+	go responsePage.EachEvent(func(e *proto.NetworkResponseReceived) {
+		if e.Type != proto.NetworkResourceTypeDocument || e.Response == nil {
+			return
+		}
+		navMu.Lock()
+		status = e.Response.Status
+		respHeaders = networkHeadersToStringMap(e.Response.Headers)
+		navMu.Unlock()
+	})()
 	err := s.page.Navigate(urlStr)
 	if err != nil {
 		return nil, fmt.Errorf("lỗi điều hướng: %w", err)
 	}
-
 	loadPage := s.page.Timeout(45 * time.Second)
 	if err := loadPage.WaitLoad(); err != nil && s.logWriter != nil {
 		fmt.Fprintf(s.logWriter, "[*] Không chờ được sự kiện load hoàn tất, tiếp tục đọc DOM hiện tại: %v\n", err)
 	}
 	loadPage.CancelTimeout()
+	stopResponseCapture()
+	navMu.Lock()
+	finalStatus := status
+	finalHeaders := respHeaders
+	navMu.Unlock()
 
 	_ = s.page.WaitDOMStable(1000*time.Millisecond, 0.5)
 
@@ -192,10 +229,18 @@ func (s *JSSession) Get(urlStr string, headers map[string]string) (*JSSessionRes
 
 	htmlBody := s.page.MustHTML()
 	return &JSSessionResponse{
-		Status:  200,
+		Status:  finalStatus,
 		Body:    htmlBody,
-		Headers: make(map[string]string),
+		Headers: finalHeaders,
 	}, nil
+}
+
+func networkHeadersToStringMap(headers proto.NetworkHeaders) map[string]string {
+	out := make(map[string]string)
+	for k, v := range headers {
+		out[strings.ToLower(k)] = v.String()
+	}
+	return out
 }
 
 func (s *JSSession) Post(urlStr string, payload any, headers map[string]string) (*JSSessionResponse, error) {
@@ -420,10 +465,6 @@ func (s *JSSession) isCloudflareActive() bool {
 		return false
 	}
 	title := info.Title
-	if strings.Contains(title, "Just a moment...") || strings.Contains(title, "Cloudflare") {
-		return true
-	}
-
 	html, err := s.page.HTML()
 	if err != nil {
 		return false
@@ -431,10 +472,27 @@ func (s *JSSession) isCloudflareActive() bool {
 	if isVisibleLoginFormHTML(html) {
 		return false
 	}
+	if isReadableHakoHTML(html) {
+		return false
+	}
+	if strings.Contains(title, "Just a moment...") || strings.Contains(title, "Cloudflare") {
+		return true
+	}
 	if strings.Contains(html, "cf-challenge") || strings.Contains(html, "challenge-platform") || strings.Contains(html, "cf-turnstile") {
 		return true
 	}
 	return false
+}
+
+func isReadableHakoHTML(html string) bool {
+	lower := strings.ToLower(html)
+	return strings.Contains(lower, `id="chapter-content"`) ||
+		strings.Contains(lower, `id='chapter-content'`) ||
+		strings.Contains(lower, `id="chapter-c-protected"`) ||
+		strings.Contains(lower, `id='chapter-c-protected'`) ||
+		strings.Contains(lower, "list-chapters") ||
+		strings.Contains(lower, "volume-list") ||
+		strings.Contains(lower, "series-name")
 }
 
 func isVisibleLoginFormHTML(html string) bool {
@@ -577,26 +635,90 @@ func (s *JSSession) fetchInPage(urlStr, method string, headers map[string]string
 func (s *Service) extensionsDir() string {
 	dir := filepath.Join(workspace, "extensions")
 	_ = os.MkdirAll(dir, 0755)
+	_ = os.MkdirAll(filepath.Join(dir, "origin"), 0755)
 	return dir
 }
 
-func (s *Service) ListExtensions() ([]ExtensionInfo, error) {
-	dir := s.extensionsDir()
-	entries, err := os.ReadDir(dir)
+func (s *Service) extensionOriginDir() string {
+	dir := filepath.Join(s.extensionsDir(), "origin")
+	_ = os.MkdirAll(dir, 0755)
+	return dir
+}
+
+func (s *Service) EnsureExtensionWorkspace() error {
+	originDir := s.extensionOriginDir()
+	entries, err := embeddedextensions.FS.ReadDir("origin")
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	storeMap := s.getStoreMd5Map()
-
-	var list []ExtensionInfo
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".js") {
 			continue
 		}
+		data, err := embeddedextensions.FS.ReadFile(filepath.ToSlash(filepath.Join("origin", entry.Name())))
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(originDir, entry.Name())
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		}
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-		filePath := filepath.Join(dir, entry.Name())
-		jsBytes, err := os.ReadFile(filePath)
+type localExtensionFile struct {
+	path   string
+	origin bool
+}
+
+func (s *Service) localExtensionFiles() []localExtensionFile {
+	rootDir := s.extensionsDir()
+	originDir := s.extensionOriginDir()
+	var files []localExtensionFile
+	for _, source := range []struct {
+		dir    string
+		origin bool
+	}{
+		{dir: originDir, origin: true},
+		{dir: rootDir},
+	} {
+		entries, err := os.ReadDir(source.dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".js") {
+				continue
+			}
+			files = append(files, localExtensionFile{
+				path:   filepath.Join(source.dir, entry.Name()),
+				origin: source.origin,
+			})
+		}
+	}
+	return files
+}
+
+func (s *Service) extensionFilePath(id string) string {
+	fileName := id + ".js"
+	originPath := filepath.Join(s.extensionOriginDir(), fileName)
+	if _, err := os.Stat(originPath); err == nil {
+		return originPath
+	}
+	return filepath.Join(s.extensionsDir(), fileName)
+}
+
+func (s *Service) ListExtensions() ([]ExtensionInfo, error) {
+	storeMap := s.getStoreMd5Map()
+
+	var list []ExtensionInfo
+	seen := make(map[string]bool)
+	for _, file := range s.localExtensionFiles() {
+		jsBytes, err := os.ReadFile(file.path)
 		if err != nil {
 			continue
 		}
@@ -605,9 +727,16 @@ func (s *Service) ListExtensions() ([]ExtensionInfo, error) {
 		if err != nil {
 			continue
 		}
+		if seen[info.ID] {
+			continue
+		}
+		seen[info.ID] = true
 
 		info.Md5 = computeMD5(jsBytes)
 
+		if file.origin {
+			info.IsOfficial = true
+		}
 		if remoteMd5, ok := storeMap[info.ID]; ok {
 			info.IsOfficial = true
 			if remoteMd5 != "" && remoteMd5 != info.Md5 {
@@ -763,24 +892,18 @@ func (s *Service) FetchStoreExtensions() ([]StoreExtensionInfo, error) {
 }
 
 func (s *Service) tagStoreWithLocalState(items []StoreExtensionInfo) []StoreExtensionInfo {
-	dir := s.extensionsDir()
 	localMd5s := make(map[string]string)
 
-	entries, err := os.ReadDir(dir)
-	if err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".js") {
-				continue
-			}
-			filePath := filepath.Join(dir, entry.Name())
-			jsBytes, err := os.ReadFile(filePath)
-			if err != nil {
-				continue
-			}
-			info, err := s.parseExtensionMeta(string(jsBytes))
-			if err != nil {
-				continue
-			}
+	for _, file := range s.localExtensionFiles() {
+		jsBytes, err := os.ReadFile(file.path)
+		if err != nil {
+			continue
+		}
+		info, err := s.parseExtensionMeta(string(jsBytes))
+		if err != nil {
+			continue
+		}
+		if _, exists := localMd5s[info.ID]; !exists {
 			localMd5s[info.ID] = computeMD5(jsBytes)
 		}
 	}
@@ -823,7 +946,7 @@ func (s *Service) InstallStoreExtension(downloadURL string) (ExtensionInfo, erro
 	if err != nil {
 		return ExtensionInfo{}, fmt.Errorf("không thể tải extension từ store: %w", err)
 	}
-	return s.AddExtension(jsBytes)
+	return s.addExtensionToDir(jsBytes, s.extensionOriginDir())
 }
 
 func (s *Service) UpdateExtension(id string) (ExtensionInfo, error) {
@@ -853,7 +976,7 @@ func (s *Service) UpdateExtension(id string) (ExtensionInfo, error) {
 	storeCache = nil
 	storeCacheMu.Unlock()
 
-	return s.AddExtension(jsBytes)
+	return s.addExtensionToDir(jsBytes, s.extensionOriginDir())
 }
 
 func formatJSPanic(vm *goja.Runtime, recovered any) error {
@@ -1003,8 +1126,7 @@ func appendChoiceOption(options []extensionChoiceOption, index int, item any) []
 }
 
 func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string]any, logWriter io.Writer) ([]string, error) {
-	dir := s.extensionsDir()
-	filePath := filepath.Join(dir, id+".js")
+	filePath := s.extensionFilePath(id)
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("extension %q not found", id)
 	}
@@ -1015,8 +1137,11 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 	}
 
 	runID := "run_" + randomID()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	activeRun := &ActiveRun{
 		SessionID: runID,
+		Cancel:    cancel,
 	}
 
 	s.activeRunsMu.Lock()
@@ -1069,7 +1194,7 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		},
 		"choose": func(prompt string, options any, multiple bool) []string {
-			selected, err := s.waitForExtensionChoice(ctx, activeRun, logWriter, prompt, options, multiple)
+			selected, err := s.waitForExtensionChoice(runCtx, activeRun, logWriter, prompt, options, multiple)
 			if err != nil {
 				panic(err)
 			}
@@ -1107,7 +1232,7 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 
 	go func() {
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			vm.Interrupt(context.Canceled)
 		case <-doneChan:
 		}
@@ -1134,7 +1259,7 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 			}
 			return nil, err
 		}
-	case <-ctx.Done():
+	case <-runCtx.Done():
 		return nil, context.Canceled
 	}
 
@@ -1211,12 +1336,15 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 }
 
 func (s *Service) AddExtension(jsCode []byte) (ExtensionInfo, error) {
+	return s.addExtensionToDir(jsCode, s.extensionsDir())
+}
+
+func (s *Service) addExtensionToDir(jsCode []byte, dir string) (ExtensionInfo, error) {
 	info, err := s.parseExtensionMeta(string(jsCode))
 	if err != nil {
 		return ExtensionInfo{}, fmt.Errorf("extension không hợp lệ: %w", err)
 	}
 
-	dir := s.extensionsDir()
 	filePath := filepath.Join(dir, info.ID+".js")
 	if err := os.WriteFile(filePath, jsCode, 0644); err != nil {
 		return ExtensionInfo{}, fmt.Errorf("không thể ghi file extension: %w", err)
@@ -1226,8 +1354,7 @@ func (s *Service) AddExtension(jsCode []byte) (ExtensionInfo, error) {
 }
 
 func (s *Service) DeleteExtension(id string) error {
-	dir := s.extensionsDir()
-	filePath := filepath.Join(dir, id+".js")
+	filePath := s.extensionFilePath(id)
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		return fmt.Errorf("extension %q không tồn tại", id)
 	}

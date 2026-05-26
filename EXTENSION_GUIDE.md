@@ -104,11 +104,29 @@ Hàm `register()` phải trả về một object JSON mô tả extension và cá
 | Trường | Kiểu | Bắt buộc | Mô tả |
 |--------|------|----------|-------|
 | `id` | `string` | ✅ | Tên tham số — sẽ truy cập được qua `params.id` trong hàm `run()` |
-| `type` | `string` | ✅ | Loại trường nhập trên UI. Giá trị hợp lệ: `"text"`, `"password"`, `"number"`, `"boolean"` |
+| `type` | `string` | ✅ | Loại trường nhập trên UI. Giá trị hợp lệ: `"text"`, `"password"`, `"number"`, `"boolean"`, `"select"` |
 | `label` | `string` | ✅ | Nhãn hiển thị bên cạnh trường nhập |
 | `placeholder` | `string` | ❌ | Văn bản gợi ý bên trong trường nhập |
+| `options` | `OptionSchema[]` | ❌ | Danh sách các tùy chọn lựa chọn (bắt buộc khi `type: "select"`) |
+| `visibleWhen` | `object` | ❌ | Điều kiện ẩn/hiện động của trường dựa trên giá trị của trường khác |
 | `defaultValue` | `any` | ❌ | Giá trị mặc định khi người dùng chưa nhập |
 | `required` | `boolean` | ❌ | Đặt `true` nếu trường bắt buộc phải nhập |
+
+### Cấu trúc `OptionSchema` (Dùng cho `type: "select"`)
+
+| Trường | Kiểu | Bắt buộc | Mô tả |
+|--------|------|----------|-------|
+| `value` | `string` | ✅ | Giá trị thực tế được truyền vào `params` khi chọn |
+| `label` | `string` | ✅ | Tên hiển thị của tùy chọn trên giao diện UI |
+| `description` | `string` | ❌ | Mô tả chi tiết thêm cho tùy chọn |
+
+### Cơ chế `visibleWhen` (Điều kiện hiển thị động)
+
+Trường `visibleWhen` cho phép bạn ẩn/hiện các input field một cách linh hoạt dựa trên giá trị được chọn của các input khác trên giao diện. Cấu trúc là một đối tượng chứa cặp `key: value`:
+- **Key**: ID của input field khác mà field hiện tại phụ thuộc vào (ví dụ: `"downloadMode"`).
+- **Value**: Giá trị hoặc mảng các giá trị của field phụ thuộc đó để field hiện tại được hiển thị.
+  - Ví dụ: `visibleWhen: { downloadMode: "chapter_range" }` (chỉ hiển thị khi `downloadMode` có giá trị là `"chapter_range"`).
+  - Ví dụ: `visibleWhen: { downloadMode: ["single_chapter", "chapter_range"] }` (hiển thị khi `downloadMode` có giá trị là `"single_chapter"` hoặc `"chapter_range"`).
 
 **Ví dụ đầy đủ:**
 
@@ -127,24 +145,32 @@ function register() {
         required: true
       },
       {
-        id: "username",
+        id: "downloadMode",
+        type: "select",
+        label: "Chế độ tải",
+        defaultValue: "all_volumes",
+        options: [
+          { value: "all_volumes", label: "Tải tất cả các volume" },
+          { value: "choose_volumes", label: "Chọn volume để tải" },
+          { value: "single_chapter", label: "Tải 1 chương bằng link" },
+          { value: "chapter_range", label: "Tải từ link A đến link B" }
+        ],
+        required: false
+      },
+      {
+        id: "startChapterUrl",
         type: "text",
-        label: "Tên đăng nhập",
-        placeholder: "Nhập username",
-        required: true
+        label: "Link chương bắt đầu",
+        placeholder: "Dán link chương đầy đủ...",
+        visibleWhen: { downloadMode: ["single_chapter", "chapter_range"] },
+        required: false
       },
       {
-        id: "password",
-        type: "password",
-        label: "Mật khẩu",
-        placeholder: "Nhập password",
-        required: true
-      },
-      {
-        id: "maxChapters",
-        type: "number",
-        label: "Số chương tối đa (0 = tất cả)",
-        defaultValue: 0,
+        id: "endChapterUrl",
+        type: "text",
+        label: "Link chương kết thúc",
+        placeholder: "Chỉ hiển thị khi tải một khoảng chương...",
+        visibleWhen: { downloadMode: "chapter_range" },
         required: false
       }
     ]

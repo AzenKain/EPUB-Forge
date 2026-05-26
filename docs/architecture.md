@@ -83,9 +83,10 @@ Contains the heart of the EPUB engine. Below is a detailed description of each s
   - Implements a batch of automated repair functions.
   - Serializes direct ZIP rebuilds against the background writer and closes cached readers before replacing the EPUB file.
 - **[extension.go](file:///e:/epub_forge/internal/service/extension.go)**:
-  - Executes Javascript crawler scripts (.js files inside `extensions/`) inside a headless browser using `go-rod`.
+  - Executes Javascript crawler scripts inside a headless browser using `go-rod`. Built-in/store extensions live in `extensions/origin/`; user-uploaded custom extensions may still be placed in `extensions/`.
   - Supports streaming screenshots and turnstile bypass indicators via SSE (Server-Sent Events) back to the UI.
   - Supports interactive choices from extensions through `utils.choose(...)`, emitted to the frontend as `choice_required` events. The UI renders checkbox/radio options and posts the selected IDs back to the active run.
+  - Supports extension input schemas with `text`, `password`, `number`, `boolean`, and `select` fields. Inputs may use `visibleWhen` to show mode-specific controls.
   - Normalizes extension return values into one or more `CreateEpubRequest` payloads. A single object creates one EPUB; an array or `{ ebooks: [...] }` creates multiple EPUB files, which is the expected shape for one series page containing multiple volumes.
   - For multi-volume scrapers, each returned ebook should use the volume heading as `title`/`metadata.title`, and store the parent series name in `metadata.series` with the volume order in `metadata.seriesIndex`.
 - **[create.go](file:///e:/epub_forge/internal/service/create.go)**:
@@ -185,7 +186,7 @@ This reference lists all key backend endpoints exposed by the service layer:
 ### 5. Crawler Extensions (Extension Center)
 
 #### `GET /api/extensions`
-- **Description**: Lists all scraper extensions (.js files inside `extensions/`).
+- **Description**: Lists all scraper extensions. Official/store extensions are read from `extensions/origin/`; custom uploaded extensions can live in `extensions/`.
 - **Response**: Array of extension info blocks.
 
 #### `POST /api/extensions/run?id={extension_id}`

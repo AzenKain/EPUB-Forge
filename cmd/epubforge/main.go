@@ -19,7 +19,7 @@ import (
 //go:embed all:dist
 var embeddedDist embed.FS
 
-var Version = "1.7.0"
+var Version = "1.8.0"
 
 func main() {
 	workspace, err := os.Getwd()
@@ -30,6 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer svc.Close()
 
 	// Clean up any left-over .old files from a previous self-update
 	go func() {

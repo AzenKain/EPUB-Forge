@@ -136,6 +136,9 @@ func New(workspaceDir string, version string) (*Service, error) {
 		version:      version,
 		updateStatus: "idle",
 	}
+	if err := s.EnsureExtensionWorkspace(); err != nil {
+		return nil, err
+	}
 	go s.StartBackgroundWriter()
 	return s, nil
 }

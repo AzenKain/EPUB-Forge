@@ -62,10 +62,11 @@ This guide details strict development standards, architectural rules, coding pat
 
 ## 🔌 JS Scraper Extensions Guidelines
 
-- **Storage**: All custom crawler extensions must be uploaded/placed inside the `extensions/` directory as `.js` files.
+- **Storage**: Built-in and Store crawler extensions live inside `extensions/origin/` and are embedded into native builds. Custom uploaded extensions may be placed in `extensions/` as `.js` files.
 - **Stealth / Cloudflare Bypass**: The headless browser runs under stealth mode. If a scraper extension triggers a captcha, the SSE (Server-Sent Events) pipeline automatically streams screenshots back to the UI.
 - **Interactive Solvers**: Use standard events in the React client to simulate pointer clicks and keystroke inputs inside the active crawler session.
-- **Interactive Choices**: Use `utils.choose(prompt, options, multiple)` when the extension must inspect a page before it can present choices, such as selecting volumes after scanning a series page. Keep the corresponding text input optional as a fast path for scripted runs.
+- **Interactive Choices**: Use `utils.choose(prompt, options, multiple)` when the extension must inspect a page before it can present choices, such as selecting volumes after scanning a series page. Prefer a clear `select` mode input plus `visibleWhen` fields when the user should choose between workflows before the run starts.
+- **Conditional Inputs**: Use `visibleWhen` for mode-specific fields so only relevant link, range, or credential inputs are shown.
 - **Multi-volume Return Shape**: When one source URL contains multiple volumes, do not flatten every chapter into one ebook. Return one ebook per selected volume using Format B (`[...]`) or Format C (`{ ebooks: [...] }`) from `EXTENSION_GUIDE.md`.
 - **Volume Metadata**: For each volume ebook, use the source volume heading as `title` and `metadata.title`. Put the parent novel/series title in `metadata.series`, and put the volume order in `metadata.seriesIndex`.
 - **Image-only Chapters**: Illustration/gallery pages with `<img>` but little or no text are valid chapters. Preserve the HTML, download images into the ebook `images` map, and do not reject the page solely because `htmlToText(content)` is short.

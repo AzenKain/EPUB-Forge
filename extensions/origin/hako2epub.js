@@ -6,7 +6,7 @@ function register() {
   return {
     id: "hako2epub",
     name: "Hako Downloader",
-    description: "Tai truyen chu tu DocLN/Hako (docln.net, docln.sbs, ln.hako.vn) sau khi dang nhap va dong goi thanh EPUB.",
+    description: "Tải truyện chữ từ DocLN/Hako (docln.net, docln.sbs, ln.hako.vn) sau khi đăng nhập và đóng gói thành EPUB.",
     inputs: [
       {
         id: "url",
@@ -30,24 +30,32 @@ function register() {
         required: true
       },
       {
-        id: "volumeSelection",
+        id: "downloadMode",
+        type: "select",
+        label: "Chế độ tải",
+        defaultValue: "all_volumes",
+        options: [
+          { value: "all_volumes", label: "1. Tải tất cả volume" },
+          { value: "choose_volumes", label: "2. Chọn volume để tải" },
+          { value: "single_chapter", label: "3. Tải 1 chương bằng link" },
+          { value: "chapter_range", label: "4. Tải từ link A đến link B" }
+        ],
+        required: false
+      },
+      {
+        id: "startChapterUrl",
         type: "text",
-        label: "Volume muốn tải (tuỳ chọn)",
-        placeholder: "VD: all, 1, 1-3, 1,4. Bỏ trống để chọn sau khi quét.",
+        label: "Link chương",
+        placeholder: "Dán link chương cần tải.",
+        visibleWhen: { downloadMode: ["single_chapter", "chapter_range"] },
         required: false
       },
       {
-        id: "startChapter",
-        type: "number",
-        label: "Từ chương (để trống = từ đầu)",
-        placeholder: "VD: 1",
-        required: false
-      },
-      {
-        id: "endChapter",
-        type: "number",
-        label: "Đến chương (để trống = đến cuối)",
-        placeholder: "VD: 100",
+        id: "endChapterUrl",
+        type: "text",
+        label: "Link chương kết thúc",
+        placeholder: "Chỉ hiện khi tải từ link A đến link B.",
+        visibleWhen: { downloadMode: "chapter_range" },
         required: false
       }
     ]
@@ -255,10 +263,73 @@ function sanitizeHTML(html) {
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<iframe[\s\S]*?<\/iframe>/gi, "")
+    .replace(/<p\b[^>]*style=["'][^"']*display\s*:\s*none[^"']*["'][^>]*>[\s\S]*?<\/p>/gi, "")
     .replace(/\s(?:onclick|onload|onerror|style|class|id|data-[a-z0-9_-]+)=(".*?"|'.*?'|[^\s>]+)/gi, "")
     .replace(/<a\b[^>]*href=["']#note[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi, "$1")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function decodeProtectedBytesBase64(text) {
+  return utils.base64ToBytes(String(text || ""));
+}
+
+function decodeProtectedUTF8(bytes) {
+  return utils.bytesToString(bytes);
+}
+
+function decodeProtectedChunk(chunk, strategy, key) {
+  let payload = String(chunk || "").substring(4);
+  if (strategy === "base64_reverse") {
+    payload = payload.split("").reverse().join("");
+  }
+  const bytes = decodeProtectedBytesBase64(payload);
+  if (strategy === "xor_shuffle") {
+    const out = new Uint8Array(bytes.length);
+    const xorKey = String(key || "");
+    if (!xorKey) return "";
+    for (let i = 0; i < bytes.length; i++) {
+      out[i] = bytes[i] ^ xorKey.charCodeAt(i % xorKey.length);
+    }
+    return decodeProtectedUTF8(out);
+  }
+  return decodeProtectedUTF8(bytes);
+}
+
+function decodeProtectedChapterContent(html) {
+  let source = String(html || "");
+  const protectedTag = source.match(/<div\b[^>]*\bid=["']chapter-c-protected["'][^>]*>/i);
+  if (!protectedTag) return source;
+
+  const tag = protectedTag[0];
+  const strategy = attrValue(tag, "data-s") || "none";
+  const key = attrValue(tag, "data-k") || "";
+  const rawChunks = decodeEntities(attrValue(tag, "data-c") || "[]");
+  let chunks = [];
+  try {
+    chunks = JSON.parse(rawChunks);
+  } catch (e) {
+    return source;
+  }
+  if (!chunks || !chunks.length) return source;
+
+  chunks.sort(function(a, b) {
+    return parseInt(String(a).substring(0, 4), 10) - parseInt(String(b).substring(0, 4), 10);
+  });
+
+  let decoded = "";
+  for (let i = 0; i < chunks.length; i++) {
+    decoded += decodeProtectedChunk(chunks[i], strategy, key);
+  }
+  decoded = decoded.replace(/\[note(\d+)\]/gi, '<span id="anchor-note$1" class="note-icon">[note]</span>');
+
+  const start = protectedTag.index;
+  const openEnd = start + tag.length;
+  const closeIdx = source.indexOf("</div>", openEnd);
+  if (closeIdx < 0) {
+    return source.slice(0, start) + decoded + source.slice(openEnd);
+  }
+  return source.slice(0, start) + decoded + source.slice(closeIdx + 6);
 }
 
 function innerById(html, id) {
@@ -458,11 +529,145 @@ function parseVolumeSelectionSpec(spec, volumeCount) {
   return result;
 }
 
+function normalizeDownloadMode(params) {
+  const mode = String(params.downloadMode || "").trim().toLowerCase();
+  if (mode === "choose_volumes" || mode === "single_chapter" || mode === "chapter_range") {
+    return mode;
+  }
+  return "all_volumes";
+}
+
 function chapterSortKey(url) {
   const cMatch = String(url || "").match(/\/c(\d+)/i);
   if (cMatch) return parseInt(cMatch[1], 10);
   const allNums = String(url || "").match(/\d+/g);
   return allNums && allNums.length ? parseInt(allNums[allNums.length - 1], 10) : 0;
+}
+
+function normalizeChapterURLForMatch(rawUrl, baseUrl) {
+  const text = String(rawUrl || "").trim();
+  if (!text) return "";
+  return normalizeHakoContentHref(text, baseUrl)
+    .replace(/[?#].*$/, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+function findChapterIndexByURL(chapters, rawUrl, baseUrl) {
+  const target = normalizeChapterURLForMatch(rawUrl, baseUrl);
+  if (!target) return -1;
+  for (let i = 0; i < chapters.length; i++) {
+    if (normalizeChapterURLForMatch(chapters[i].url, baseUrl) === target) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function chapterURLRangeParams(params) {
+  const mode = normalizeDownloadMode(params);
+  let startUrl = String(params.startChapterUrl || "").trim();
+  let endUrl = String(params.endChapterUrl || "").trim();
+  if (mode === "all_volumes" || mode === "choose_volumes") {
+    return { startUrl: "", endUrl: "" };
+  }
+  if (mode === "single_chapter") {
+    if (!startUrl) throw new Error("Mode 3 can link chuong can tai.");
+    endUrl = startUrl;
+  }
+  if (mode === "chapter_range" && (!startUrl || !endUrl)) {
+    throw new Error("Mode 4 can ca link chuong bat dau va link chuong ket thuc.");
+  }
+  const normalizedStart = /^https?:\/\//i.test(startUrl) || startUrl.indexOf("/") === 0 ? startUrl : "";
+  const normalizedEnd = /^https?:\/\//i.test(endUrl) || endUrl.indexOf("/") === 0 ? endUrl : "";
+  if ((mode === "single_chapter" || mode === "chapter_range") && (!normalizedStart || !normalizedEnd)) {
+    throw new Error("Link chuong khong hop le. Hay dan link day du cua Hako/DocLN.");
+  }
+  return {
+    startUrl: normalizedStart,
+    endUrl: normalizedEnd
+  };
+}
+
+function applyChapterURLRangeToChapters(chapters, params, baseUrl, label) {
+  const range = chapterURLRangeParams(params);
+  if (!range.startUrl && !range.endUrl) return chapters;
+
+  let startIdx = range.startUrl ? findChapterIndexByURL(chapters, range.startUrl, baseUrl) : 0;
+  let endIdx = range.endUrl ? findChapterIndexByURL(chapters, range.endUrl, baseUrl) : chapters.length - 1;
+  if (startIdx < 0) throw new Error("Khong tim thay link chuong bat dau trong " + label + ": " + range.startUrl);
+  if (endIdx < 0) throw new Error("Khong tim thay link chuong ket thuc trong " + label + ": " + range.endUrl);
+  if (startIdx > endIdx) {
+    const tmp = startIdx;
+    startIdx = endIdx;
+    endIdx = tmp;
+  }
+
+  const selected = chapters.slice(startIdx, endIdx + 1);
+  console.log("[*] " + label + ": da chon tai tu #" + (startIdx + 1) + " den #" + (endIdx + 1) + " (" + selected.length + " chuong).");
+  return selected;
+}
+
+function applyChapterURLRangeToVolumes(volumes, params, baseUrl) {
+  const range = chapterURLRangeParams(params);
+  if (!range.startUrl && !range.endUrl) return volumes;
+
+  const flat = [];
+  for (let v = 0; v < volumes.length; v++) {
+    const chapters = volumes[v].chapters || [];
+    for (let c = 0; c < chapters.length; c++) {
+      flat.push({ volumeIndex: v, chapterIndex: c, chapter: chapters[c] });
+    }
+  }
+  if (flat.length === 0) return volumes;
+
+  let startFlat = 0;
+  let endFlat = flat.length - 1;
+  if (range.startUrl) {
+    startFlat = -1;
+    for (let i = 0; i < flat.length; i++) {
+      if (normalizeChapterURLForMatch(flat[i].chapter.url, baseUrl) === normalizeChapterURLForMatch(range.startUrl, baseUrl)) {
+        startFlat = i;
+        break;
+      }
+    }
+    if (startFlat < 0) throw new Error("Khong tim thay link chuong bat dau trong cac volume da chon: " + range.startUrl);
+  }
+  if (range.endUrl) {
+    endFlat = -1;
+    for (let i = 0; i < flat.length; i++) {
+      if (normalizeChapterURLForMatch(flat[i].chapter.url, baseUrl) === normalizeChapterURLForMatch(range.endUrl, baseUrl)) {
+        endFlat = i;
+        break;
+      }
+    }
+    if (endFlat < 0) throw new Error("Khong tim thay link chuong ket thuc trong cac volume da chon: " + range.endUrl);
+  }
+  if (startFlat > endFlat) {
+    const tmp = startFlat;
+    startFlat = endFlat;
+    endFlat = tmp;
+  }
+
+  const byVolume = {};
+  for (let i = startFlat; i <= endFlat; i++) {
+    const item = flat[i];
+    const key = String(item.volumeIndex);
+    if (!byVolume[key]) byVolume[key] = [];
+    byVolume[key].push(item.chapter);
+  }
+
+  const selectedVolumes = [];
+  for (let v = 0; v < volumes.length; v++) {
+    const selectedChapters = byVolume[String(v)] || [];
+    if (selectedChapters.length === 0) continue;
+    const clone = {};
+    for (const key in volumes[v]) clone[key] = volumes[v][key];
+    clone.chapters = selectedChapters;
+    selectedVolumes.push(clone);
+  }
+  console.log("[*] Da chon tai tu chapter link #" + (startFlat + 1) + " den #" + (endFlat + 1) + " tren cac volume da chon (" + (endFlat - startFlat + 1) + " chuong).");
+  return selectedVolumes;
 }
 
 function getExtFromURL(url) {
@@ -477,6 +682,53 @@ function mimeFromExt(ext) {
   if (ext === "gif") return "image/gif";
   if (ext === "webp") return "image/webp";
   return "image/jpeg";
+}
+
+function responseHeader(resp, name) {
+  const headers = resp && resp.Headers ? resp.Headers : (resp && resp.headers ? resp.headers : null);
+  if (!headers) return "";
+  const target = String(name || "").toLowerCase();
+  for (const key in headers) {
+    if (String(key).toLowerCase() === target) {
+      return String(headers[key]);
+    }
+  }
+  return "";
+}
+
+function rateLimitWaitMs(resp, fallbackMs) {
+  const remainingText = responseHeader(resp, "x-ratelimit-remaining");
+  if (!remainingText) return fallbackMs;
+
+  const remaining = parseInt(remainingText, 10);
+  if (isNaN(remaining)) return fallbackMs;
+  if (remaining <= 0) {
+    const retryAfter = parseInt(responseHeader(resp, "retry-after"), 10);
+    if (!isNaN(retryAfter) && retryAfter > 0) {
+      return Math.min(retryAfter * 1000, 60000);
+    }
+
+    const reset = parseInt(responseHeader(resp, "x-ratelimit-reset"), 10);
+    if (!isNaN(reset) && reset > 0) {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const resetDelay = reset > nowSeconds ? (reset - nowSeconds) * 1000 : reset * 1000;
+      return Math.min(Math.max(resetDelay, 5000), 60000);
+    }
+    return 10000;
+  }
+  if (remaining <= 2) return 5000;
+  if (remaining <= 5) return 2500;
+  if (remaining <= 10) return 1200;
+  return fallbackMs;
+}
+
+function waitAfterHakoResponse(resp, fallbackMs) {
+  const waitMs = rateLimitWaitMs(resp, fallbackMs);
+  if (waitMs > fallbackMs) {
+    const remaining = responseHeader(resp, "x-ratelimit-remaining");
+    console.log("[*] Hako rate-limit remaining=" + remaining + ", doi " + Math.round(waitMs / 1000) + "s truoc request tiep theo.");
+  }
+  utils.sleep(waitMs);
 }
 
 function run(params) {
@@ -560,19 +812,6 @@ function run(params) {
       throw new Error("Không tìm thấy chương truyện nào trong volume: " + volume.title);
     }
 
-    let startIdx = 0;
-    let endIdx = volumeChapters.length;
-    if (params.startChapter && Number(params.startChapter) > 0) startIdx = Number(params.startChapter) - 1;
-    if (params.endChapter && Number(params.endChapter) > 0) endIdx = Number(params.endChapter);
-    if (startIdx >= volumeChapters.length) {
-      throw new Error("Chương bắt đầu (" + (startIdx + 1) + ") vượt quá tổng số chương (" + volumeChapters.length + ") của " + volume.title + ".");
-    }
-    if (endIdx > volumeChapters.length) endIdx = volumeChapters.length;
-    if (startIdx > 0 || endIdx < volumeChapters.length) {
-      volumeChapters = volumeChapters.slice(startIdx, endIdx);
-      console.log("[*] " + volume.title + ": đã chọn tải từ chương " + (startIdx + 1) + " đến chương " + endIdx + " (" + volumeChapters.length + " chương).");
-    }
-
     const volumeTitle = volume.title || ("Vol " + volume.index);
     const effectiveCoverURL = volume.coverURL || coverURL;
     let coverImage = "";
@@ -609,8 +848,10 @@ function run(params) {
         chap.title;
 
       let content = innerById(chapResp.Body, "chapter-content");
+      content = decodeProtectedChapterContent(content);
       if (!content || (!/<img\b/i.test(content) && htmlToText(content).length < 20)) {
         content = firstMatch(chapResp.Body, /<div[^>]*id=["']chapter-c-protected["'][^>]*>([\s\S]*?)<\/div>/i);
+        content = decodeProtectedChapterContent(content);
       }
       if (!content || (!/<img\b/i.test(content) && htmlToText(content).length < 5)) {
         throw new Error("Không tìm thấy nội dung chương hoặc nội dung bị khóa: " + pageTitle);
@@ -667,7 +908,7 @@ function run(params) {
         text: content,
         rawHtml: true
       });
-      utils.sleep(700);
+      waitAfterHakoResponse(chapResp, 700);
     }
 
     if (resultChapters.length === 0) {
@@ -699,8 +940,9 @@ function run(params) {
       console.log("  [" + volumes[v].index + "] " + volumes[v].title + " (" + volumes[v].chapters.length + " chương)");
     }
 
-    let selectedVolumeIDs = parseVolumeSelectionSpec(params.volumeSelection, volumes.length);
-    if (!selectedVolumeIDs) {
+    const downloadMode = normalizeDownloadMode(params);
+    let selectedVolumeIDs = parseVolumeSelectionSpec(downloadMode === "choose_volumes" ? "" : "all", volumes.length);
+    if (downloadMode === "choose_volumes") {
       const options = [];
       for (let v = 0; v < volumes.length; v++) {
         options.push({
@@ -717,7 +959,7 @@ function run(params) {
       selectedMap[String(selectedVolumeIDs[i])] = true;
     }
 
-    const selectedVolumes = [];
+    let selectedVolumes = [];
     for (let v = 0; v < volumes.length; v++) {
       if (selectedMap[String(volumes[v].index)]) {
         selectedVolumes.push(volumes[v]);
@@ -725,6 +967,11 @@ function run(params) {
     }
     if (selectedVolumes.length === 0) {
       throw new Error("Không có volume hợp lệ nào được chọn.");
+    }
+
+    selectedVolumes = applyChapterURLRangeToVolumes(selectedVolumes, params, storyUrl);
+    if (selectedVolumes.length === 0) {
+      throw new Error("Khong co chuong nao nam trong khoang link da chon.");
     }
 
     console.log("[*] Sẽ tải " + selectedVolumes.length + " volume thành các EPUB riêng.");
@@ -755,18 +1002,7 @@ function run(params) {
     throw new Error("Không tìm thấy chương truyện nào để tải.");
   }
 
-  let startIdx = 0;
-  let endIdx = chapters.length;
-  if (params.startChapter && Number(params.startChapter) > 0) startIdx = Number(params.startChapter) - 1;
-  if (params.endChapter && Number(params.endChapter) > 0) endIdx = Number(params.endChapter);
-  if (startIdx >= chapters.length) {
-    throw new Error("Chương bắt đầu (" + (startIdx + 1) + ") vượt quá tổng số chương (" + chapters.length + ").");
-  }
-  if (endIdx > chapters.length) endIdx = chapters.length;
-  if (startIdx > 0 || endIdx < chapters.length) {
-    chapters = chapters.slice(startIdx, endIdx);
-    console.log("[*] Đã chọn tải từ chương " + (startIdx + 1) + " đến chương " + endIdx + " (" + chapters.length + " chương).");
-  }
+  chapters = applyChapterURLRangeToChapters(chapters, params, storyUrl, "truyen");
 
   const effectiveCoverURL = coverURL;
   let coverImage = "";
@@ -803,8 +1039,10 @@ function run(params) {
       chap.title;
 
     let content = innerById(chapResp.Body, "chapter-content");
+    content = decodeProtectedChapterContent(content);
     if (!content || (!/<img\b/i.test(content) && htmlToText(content).length < 20)) {
       content = firstMatch(chapResp.Body, /<div[^>]*id=["']chapter-c-protected["'][^>]*>([\s\S]*?)<\/div>/i);
+      content = decodeProtectedChapterContent(content);
     }
     if (!content || (!/<img\b/i.test(content) && htmlToText(content).length < 5)) {
       throw new Error("Không tìm thấy nội dung chương hoặc nội dung bị khóa: " + pageTitle);
@@ -861,7 +1099,7 @@ function run(params) {
       text: content,
       rawHtml: true
     });
-    utils.sleep(700);
+    waitAfterHakoResponse(chapResp, 700);
   }
 
   if (resultChapters.length === 0) {
