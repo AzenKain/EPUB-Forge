@@ -33,6 +33,11 @@ const manualRepairTasks = [
     fixId: "BUILD_COVER_PAGE",
     title: "Xây dựng trang cover",
     description: "Tạo hoặc dựng lại trang bìa XHTML từ ảnh cover có trong EPUB và đưa lên đầu spine."
+  },
+  {
+    fixId: "BUILD_CHAPTER_TITLES",
+    title: "Xây dựng lại tiêu đề chương",
+    description: "Tự động bổ sung thẻ tiêu đề (h2) hiển thị ở đầu mỗi chương nếu file chưa có tiêu đề."
   }
 ];
 

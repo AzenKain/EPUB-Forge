@@ -77,7 +77,7 @@ var (
 	publisherTextRe      = regexp.MustCompile(`(?is)<dc:publisher\b[^>]*>(.*?)</dc:publisher>`)
 	descriptionTextRe    = regexp.MustCompile(`(?is)<dc:description\b[^>]*>(.*?)</dc:description>`)
 	subjectTextRe        = regexp.MustCompile(`(?is)<dc:subject\b[^>]*>(.*?)</dc:subject>`)
-	htmlTitleRe          = regexp.MustCompile(`(?is)<h[1-3]\b[^>]*>(.*?)</h[1-3]>|<title\b[^>]*>(.*?)</title>`)
+	htmlTitleRe          = regexp.MustCompile(`(?is)<h[1-6]\b[^>]*>(.*?)</h[1-6]>|<title\b[^>]*>(.*?)</title>`)
 	srcRe                = regexp.MustCompile(`(?is)\s(?:src|poster)\s*=\s*["']([^"']+)["']`)
 	srcsetRe             = regexp.MustCompile(`(?is)\ssrcset\s*=\s*["']([^"']+)["']`)
 	linkRe               = regexp.MustCompile(`(?is)<link\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>`)
@@ -868,3 +868,32 @@ func copyFile(src string, dst string) error {
 	}
 	return nil
 }
+
+func isChapterTitleMissing(htmlStr string) bool {
+	reBody := regexp.MustCompile(`(?i)<body[^>]*>`)
+	bodyLoc := reBody.FindStringIndex(htmlStr)
+	var bodyContent string
+	if bodyLoc == nil {
+		bodyContent = htmlStr
+	} else {
+		bodyContent = htmlStr[bodyLoc[1]:]
+	}
+
+	reHeading := regexp.MustCompile(`(?i)<h[1-6]\b`)
+	headingLoc := reHeading.FindStringIndex(bodyContent)
+	if headingLoc == nil {
+		return true // No heading at all
+	}
+
+	beforeHeading := bodyContent[:headingLoc[0]]
+	stripped := stripTags(beforeHeading)
+	unescaped := html.UnescapeString(stripped)
+	unescaped = strings.ReplaceAll(unescaped, "\u00a0", " ")
+	unescaped = strings.ReplaceAll(unescaped, "\u200b", " ")
+
+	if strings.TrimSpace(unescaped) != "" {
+		return true // Text exists before heading, so main title heading is missing
+	}
+	return false
+}
+

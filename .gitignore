@@ -3,6 +3,7 @@ dist-native/
 node_modules/
 dist/
 output/
+scratch/
 edit/
 *.exe
 *.exe~

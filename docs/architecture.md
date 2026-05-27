@@ -80,11 +80,12 @@ Contains the heart of the EPUB engine. Below is a detailed description of each s
   - Cleans HTML structures by stripping inline styles and empty elements.
   - Uses the shared Windows-safe ZIP replacement path for direct EPUB rewrites.
 - **[repair.go](file:///e:/epub_forge/internal/service/repair.go)**:
-  - Scans EPUB files for standard compliance errors (missing container, broken manifest items, unlisted spine files, missing cover declarations).
-  - Implements a batch of automated repair functions.
+  - Scans EPUB files for standard compliance errors (missing container, broken manifest items, unlisted spine files, missing cover declarations, and malformed/syntax-error NCX XML files).
+  - Implements a batch of automated repair functions, including automatic reconstruction of `toc.ncx` from the OPF spine if the existing NCX file contains syntax or tag mismatch errors.
   - Serializes direct ZIP rebuilds against the background writer and closes cached readers before replacing the EPUB file.
 - **[extension.go](file:///e:/epub_forge/internal/service/extension.go)**:
   - Executes Javascript crawler scripts inside a headless browser using `go-rod`. Built-in/store extensions live in `extensions/origin/`; user-uploaded custom extensions may still be placed in `extensions/`.
+  - Implements `AutoUpdateExtensions()` to check remote extensions from the official GitHub store on application startup, comparing MD5 checksums and overwriting local official files when updates are available.
   - Supports streaming screenshots and turnstile bypass indicators via SSE (Server-Sent Events) back to the UI.
   - Supports interactive choices from extensions through `utils.choose(...)`, emitted to the frontend as `choice_required` events. The UI renders checkbox/radio options and posts the selected IDs back to the active run.
   - Supports extension input schemas with `text`, `password`, `number`, `boolean`, and `select` fields. Inputs may use `visibleWhen` to show mode-specific controls.

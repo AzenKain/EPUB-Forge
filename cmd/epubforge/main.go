@@ -19,7 +19,7 @@ import (
 //go:embed all:dist
 var embeddedDist embed.FS
 
-var Version = "2.0.0"
+var Version = "2.1.0"
 
 func main() {
 	workspace, err := os.Getwd()
@@ -57,6 +57,7 @@ func main() {
 		} else {
 			log.Printf("[SelfUpdate] EPUBForge đã ở phiên bản mới nhất (%s).", Version)
 		}
+		svc.AutoUpdateExtensions()
 	}()
 
 	port := utils.Env("PORT", "5180")

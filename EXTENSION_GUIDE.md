@@ -39,6 +39,10 @@ EPUBForge thực thi extension bên trong **Goja** (máy ảo JS viết bằng G
 
 Nếu trang web yêu cầu xác minh captcha thủ công hoặc Turnstile, EPUBForge sẽ chụp ảnh màn hình trình duyệt theo thời gian thực và truyền về giao diện React, cho phép người dùng giải captcha bằng cách click hoặc nhập text trực tiếp.
 
+### 🔄 Cơ chế tự động cập nhật Extension (Auto-Update)
+
+Khi EPUBForge khởi động, ứng dụng sẽ tự động chạy tiến trình kiểm tra phiên bản các extension chính thức nằm trong thư mục `extensions/origin/` bằng cách so sánh mã MD5 checksum của chúng với các file trên Github Store chính thức. Nếu phát hiện có bản cập nhật mới, ứng dụng sẽ tự động tải xuống và ghi đè phiên bản mới nhất vào `extensions/origin/` để đảm bảo các scraper hoạt động ổn định và tự cập nhật sửa lỗi mà không cần người dùng thao tác thủ công.
+
 ---
 
 ## 📝 Cấu trúc file Extension
@@ -699,6 +703,9 @@ while ((imgMatch = imgRegex.exec(chapterHtml)) !== null) {
 ### Format A: Trả về một EPUB duy nhất (Single Ebook)
 
 Dùng khi URL scrape ra một cuốn sách duy nhất. Đây là format phổ biến nhất.
+
+> [!TIP]
+> Đối với sách đơn (Single Ebook), bạn cũng nên trả về trường `metadata.series` (tên bộ truyện/series) và `metadata.seriesIndex` (số tập) nếu có, giúp các ứng dụng đọc sách hoặc quản lý thư viện (như Calibre) nhận diện chính xác thứ tự tập trong bộ.
 
 ```javascript
 function run(params) {

@@ -1116,6 +1116,7 @@ function run(params) {
       language: "vi",
       publisher: "Hako / DocLN",
       description: htmlToText(firstMatch(seriesResp.Body, /<div[^>]*class=["'][^"']*summary-content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)),
+      series: title,
       coverImage: coverImage
     },
     chapters: resultChapters,

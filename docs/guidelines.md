@@ -71,6 +71,7 @@ This guide details strict development standards, architectural rules, coding pat
 ## 🔌 JS Scraper Extensions Guidelines
 
 - **Storage**: Built-in and Store crawler extensions live inside `extensions/origin/` and are embedded into native builds. Custom uploaded extensions may be placed in `extensions/` as `.js` files.
+- **Auto-Update**: On application startup, the Go backend automatically checks for updates for all official/origin extensions against the remote GitHub store and synchronizes them to `extensions/origin/` if updates are available.
 - **Stealth / Cloudflare Bypass**: The headless browser runs under stealth mode. If a scraper extension triggers a captcha, the SSE (Server-Sent Events) pipeline automatically streams screenshots back to the UI.
 - **Interactive Solvers**: Use standard events in the React client to simulate pointer clicks and keystroke inputs inside the active crawler session.
 - **Interactive Choices**: Use `utils.choose(prompt, options, multiple)` when the extension must inspect a page before it can present choices, such as selecting volumes after scanning a series page. Prefer a clear `select` mode input plus `visibleWhen` fields when the user should choose between workflows before the run starts.

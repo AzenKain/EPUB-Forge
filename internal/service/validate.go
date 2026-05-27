@@ -49,7 +49,7 @@ func repairFixForIssue(code string) (string, bool) {
 		return "ADD_UNMANIFESTED_FILES", true
 	case "XHTML_XML", "XHTML_NAMESPACE":
 		return "FIX_XHTML", true
-	case "NCX_LINK_MISSING", "NCX_IDREF_MISSING":
+	case "NCX_XML", "NCX_LINK_MISSING", "NCX_IDREF_MISSING":
 		return "FIX_TOC_NCX", true
 	case "VISIBLE_TOC_PAGE_MISSING":
 		return "BUILD_TOC_PAGE", true
@@ -57,6 +57,8 @@ func repairFixForIssue(code string) (string, bool) {
 		return "BUILD_COVER_PAGE", true
 	case "LINK_TARGET_MISSING":
 		return "CLEAN_BROKEN_CONTENT_LINKS", true
+	case "CHAPTER_TITLE_MISSING":
+		return "BUILD_CHAPTER_TITLES", true
 	default:
 		return "", false
 	}
@@ -318,6 +320,20 @@ func (ctx *BookContext) validateContentDocuments(b *validationBuilder) {
 			if !manifestPaths[resolved] {
 				b.add("warning", "LINK_TARGET_UNMANIFESTED", item.FullPath, "local reference points to a file outside the manifest: "+ref)
 			}
+		}
+	}
+
+	for _, ch := range ctx.Chapters {
+		lowerPath := strings.ToLower(ch.Path)
+		if !strings.HasSuffix(lowerPath, ".xhtml") && !strings.HasSuffix(lowerPath, ".html") && !strings.HasSuffix(lowerPath, ".htm") {
+			continue
+		}
+		text, err := ctx.readText(ch.Path)
+		if err != nil {
+			continue
+		}
+		if isChapterTitleMissing(text) {
+			b.add("warning", "CHAPTER_TITLE_MISSING", ch.Path, fmt.Sprintf("Chương %q (file %s) không có tiêu đề heading (h1-h6) hiển thị.", ch.Title, ch.Href))
 		}
 	}
 }

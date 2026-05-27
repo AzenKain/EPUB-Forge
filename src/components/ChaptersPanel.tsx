@@ -186,7 +186,7 @@ export function ChaptersPanel({
   const handleSplit = async (index: number, title: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (isReordering) return;
-    if (!confirm(`Bạn có muốn tự động tách chương "${title}" thành các chương nhỏ dựa trên các thẻ tiêu đề (H1/H2/H3) không?`)) return;
+    if (!confirm(`Bạn có muốn tự động tách chương "${title}" thành các chương nhỏ dựa trên các thẻ tiêu đề (H1-H6) không?`)) return;
 
     try {
       onSetBusy("Đang tách chương...");
@@ -203,7 +203,7 @@ export function ChaptersPanel({
       const data = await res.json();
       onUpdateAnalysis(data);
     } catch (err: any) {
-      onSetError(err.message || "Không tìm thấy đủ tiêu đề (H1, H2, H3) trong chương này để tự động tách.");
+      onSetError(err.message || "Không tìm thấy đủ tiêu đề (H1-H6) trong chương này để tự động tách.");
     } finally {
       onSetBusy("");
     }
@@ -471,7 +471,7 @@ export function ChaptersPanel({
                     className="chapterActionBtn"
                     disabled={isReordering}
                     onClick={(e) => handleSplit(chapter.index, chapter.title, e)}
-                    title="Tách tự động (H1-H3)"
+                    title="Tách tự động (H1-H6)"
                   >
                     <Scissors size={12} />
                   </button>

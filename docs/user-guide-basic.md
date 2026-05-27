@@ -73,6 +73,8 @@ Extension chính thức thường dùng:
 - Jukaza Downloader: tải truyện từ Jukaza.
 - Valvrareteam Downloader: tải truyện từ Valvrareteam, có thể dùng tài khoản nếu truyện/chương bị khóa.
 
+Lưu ý: Các extension chính thức (nằm trong thư mục `extensions/origin/`) sẽ được ứng dụng tự động kiểm tra và cập nhật lên phiên bản mới nhất từ Github Store mỗi khi khởi động.
+
 Không nên lưu tài khoản/mật khẩu thật vào file extension. Hãy nhập trong giao diện khi cần.
 
 ## 4. Thêm hoặc mở sách EPUB
@@ -275,7 +277,7 @@ Cách dùng:
 3. Bấm Sửa mục đã chọn.
 4. Chờ app cập nhật lại sách.
 
-Tính năng này hữu ích khi EPUB bị thiếu mục lục, sai manifest, link ảnh hỏng hoặc thiếu trang cover.
+Tính năng này hữu ích khi EPUB bị thiếu mục lục, lỗi cấu trúc XML của file `toc.ncx`, sai manifest, link ảnh hỏng hoặc thiếu trang cover.
 
 ## 14. Tìm và thay thế
 

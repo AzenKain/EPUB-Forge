@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -1442,5 +1443,64 @@ func answerExtensionChoice(run *ActiveRun, text string) error {
 		return nil
 	default:
 		return errors.New("yêu cầu chọn đã được xử lý")
+	}
+}
+
+func (s *Service) AutoUpdateExtensions() {
+	log.Printf("[Extensions] Đang kiểm tra cập nhật các tiện ích mở rộng từ store...")
+
+	storeItems, err := s.FetchStoreExtensions()
+	if err != nil {
+		log.Printf("[Extensions] Không thể tải danh sách tiện ích từ store: %v", err)
+		return
+	}
+
+	list, err := s.ListExtensions()
+	if err != nil {
+		log.Printf("[Extensions] Không thể lấy danh sách tiện ích cục bộ: %v", err)
+		return
+	}
+
+	updatedCount := 0
+	for _, ext := range list {
+		if ext.HasUpdate && ext.IsOfficial {
+			log.Printf("[Extensions] Phát hiện bản cập nhật mới cho %s (%s). Đang tải...", ext.Name, ext.ID)
+
+			var downloadURL string
+			for _, item := range storeItems {
+				if item.ID == ext.ID {
+					downloadURL = item.DownloadURL
+					break
+				}
+			}
+
+			if downloadURL == "" {
+				continue
+			}
+
+			jsBytes, err := s.downloadRawFile(downloadURL)
+			if err != nil {
+				log.Printf("[Extensions] Lỗi khi tải bản cập nhật cho %s: %v", ext.ID, err)
+				continue
+			}
+
+			_, err = s.addExtensionToDir(jsBytes, s.extensionOriginDir())
+			if err != nil {
+				log.Printf("[Extensions] Lỗi khi cài đặt bản cập nhật cho %s: %v", ext.ID, err)
+			} else {
+				log.Printf("[Extensions] Đã cập nhật thành công tiện ích %s!", ext.Name)
+				updatedCount++
+			}
+		}
+	}
+
+	if updatedCount > 0 {
+		// Invalidate store cache since local state changed
+		storeCacheMu.Lock()
+		storeCache = nil
+		storeCacheMu.Unlock()
+		log.Printf("[Extensions] Đã tự động cập nhật thành công %d tiện ích mở rộng.", updatedCount)
+	} else {
+		log.Printf("[Extensions] Tất cả tiện ích mở rộng đã ở phiên bản mới nhất.")
 	}
 }

@@ -411,7 +411,21 @@ func createNormalChapterHTML(title, content string, rawHTML bool, assets map[str
 	if rawHTML {
 		trimmed := rewriteRawChapterAssetRefs(strings.TrimSpace(content), assets)
 		if strings.Contains(strings.ToLower(trimmed), "<html") {
+			if isChapterTitleMissing(trimmed) {
+				reBody := regexp.MustCompile(`(?i)(<body[^>]*>)`)
+				bodyMatch := reBody.FindStringSubmatchIndex(trimmed)
+				if len(bodyMatch) >= 2 {
+					bodyTagEnd := bodyMatch[1]
+					heading := fmt.Sprintf("\n  <h2>%s</h2>", escapeXML(title))
+					trimmed = trimmed[:bodyTagEnd] + heading + trimmed[bodyTagEnd:]
+				}
+			}
 			return trimmed
+		}
+
+		dummyHTML := "<body>" + trimmed + "</body>"
+		if isChapterTitleMissing(dummyHTML) {
+			return wrapChapterBody(title, fmt.Sprintf("  <h2>%s</h2>\n%s", escapeXML(title), trimmed))
 		}
 		return wrapChapterBody(title, trimmed)
 	}

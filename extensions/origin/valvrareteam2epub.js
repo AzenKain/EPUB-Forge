@@ -439,7 +439,14 @@ function collectVolumesFromSeriesHTML(html, storyUrl) {
 function extractSeriesInfo(html, storyUrl) {
   const book = findBookJSONLD(html) || {};
   let title = book.name || "";
-  if (!title) title = htmlToText(firstMatch(html, /<h1\b[^>]*class=["'][^"']*rd-novel-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i));
+  if (!title) {
+    let rawTitle = firstMatch(html, /<h1\b[^>]*class=["'][^"']*rd-novel-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i);
+    if (rawTitle) {
+      rawTitle = rawTitle.replace(/<button\b[\s\S]*?<\/button>/gi, "");
+      rawTitle = rawTitle.replace(/<span\b[\s\S]*?<\/span>/gi, "");
+      title = htmlToText(rawTitle);
+    }
+  }
   if (!title) title = htmlToText(extractMeta(html, "og:title"));
   if (!title) title = htmlToText(firstMatch(html, /<title[^>]*>([\s\S]*?)<\/title>/i));
   title = title.replace(/\s*\|\s*Valvrareteam.*$/i, "").trim() || "Valvrareteam Novel";

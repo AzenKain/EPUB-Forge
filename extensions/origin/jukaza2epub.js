@@ -517,6 +517,7 @@ function run(params) {
       title: novelTitle,
       creator: novelAuthor,
       language: "vi",
+      series: novelTitle,
       coverImage: coverImageBase64
     },
     chapters: resultChapters,

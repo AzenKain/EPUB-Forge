@@ -859,10 +859,10 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 			return "", err
 		}
 
-		re := regexp.MustCompile(`(?i)<h[1-3][^>]*>`)
+		re := regexp.MustCompile(`(?i)<h[1-6][^>]*>`)
 		matches := re.FindAllStringIndex(htmlContent, -1)
 		if len(matches) < 2 {
-			return "", errors.New("không tìm thấy đủ tiêu đề (H1, H2, H3) trong chương này để tự động tách")
+			return "", errors.New("không tìm thấy đủ tiêu đề (H1-H6) trong chương này để tự động tách")
 		}
 
 		var parts []string
@@ -871,7 +871,7 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 		for i, match := range matches {
 			start := match[0]
 			headerTitle := fmt.Sprintf("%s (Phần %d)", ch.Title, i+1)
-			headerRe := regexp.MustCompile(`(?i)</h[1-3]>`)
+			headerRe := regexp.MustCompile(`(?i)</h[1-6]>`)
 			endMatch := headerRe.FindStringIndex(htmlContent[start:])
 			if endMatch != nil {
 				headerHTML := htmlContent[start : start+endMatch[1]]

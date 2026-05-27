@@ -105,7 +105,7 @@ Thao tác với chương:
 - Đổi tên chương bằng nút bút chì.
 - Thêm chương mới sau chương đang preview.
 - Xóa chương khỏi luồng đọc.
-- Tách tự động một chương dựa trên heading `h1`, `h2`, `h3`.
+- Tách tự động một chương dựa trên heading từ `h1` đến `h6`.
 - Chọn nhiều để gộp hoặc xóa nhiều chương.
 
 Gộp chương thủ công:
@@ -452,6 +452,7 @@ Nhóm lỗi có thể tự sửa:
 - Thêm file chưa khai báo vào manifest.
 - Sửa XHTML namespace/XML/entity phổ biến.
 - Sửa NCX/TOC trỏ sai.
+- Tự động dựng lại file `toc.ncx` bị lỗi cú pháp XML từ danh sách spine.
 - Dọn link/ảnh hỏng trong content.
 - Tạo lại trang TOC hiển thị.
 - Tạo lại trang cover từ ảnh bìa.
@@ -479,6 +480,7 @@ Tab Đã cài:
 - Upload extension `.js` mới.
 - Xóa extension.
 - Cập nhật extension đang chọn nếu có bản mới.
+- Tự động kiểm tra và cập nhật các extension chính thức (nằm trong thư mục `extensions/origin/`) từ Github Store mỗi khi khởi động ứng dụng.
 
 Tab Cửa hàng:
 

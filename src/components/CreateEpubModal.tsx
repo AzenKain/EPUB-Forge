@@ -236,7 +236,7 @@ function splitHTMLIntoChapters(html: string, fallbackTitle: string): ChapterDraf
     return [createChapter(1, { title: fallbackTitle, editorMode: "visual", htmlContent: html, textContent: htmlToText(html) })];
   }
 
-  const headingTags = new Set(["H1", "H2"]);
+  const headingTags = new Set(["H1", "H2", "H3", "H4", "H5", "H6"]);
   const sections: Array<{ title: string; nodes: Node[] }> = [];
   let current: { title: string; nodes: Node[] } | null = null;
   let preamble: Node[] = [];

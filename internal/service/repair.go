@@ -192,6 +192,10 @@ func (s *Service) Repair(id string, fixes []string) (models.RepairResponse, erro
 		}
 	}
 
+	if selected.has("BUILD_CHAPTER_TITLES") {
+		repairChapterTitles(ctx, editedFiles, &logs)
+	}
+
 	if selected.has("BUILD_TOC_PAGE") || selected.has("BUILD_COVER_PAGE") {
 		rebuildVisibleTOCDocuments(ctx, validSpineRefs, editedFiles, &logs)
 		rebuildNavDocuments(ctx, validSpineRefs, editedFiles, &logs)
@@ -362,6 +366,45 @@ func (s *Service) Repair(id string, fixes []string) (models.RepairResponse, erro
 	}, nil
 }
 
+func repairChapterTitles(ctx *BookContext, editedFiles map[string][]byte, logs *[]string) {
+	reBody := regexp.MustCompile(`(?i)(<body[^>]*>)`)
+
+	for _, ch := range ctx.Chapters {
+		lowerPath := strings.ToLower(ch.Path)
+		if !strings.HasSuffix(lowerPath, ".xhtml") && !strings.HasSuffix(lowerPath, ".html") && !strings.HasSuffix(lowerPath, ".htm") {
+			continue
+		}
+
+		var htmlStr string
+		var errRead error
+		if edited, ok := editedFiles[ch.Path]; ok {
+			htmlStr = string(edited)
+		} else {
+			htmlStr, errRead = ctx.readText(ch.Path)
+			if errRead != nil {
+				continue
+			}
+		}
+
+		if !isChapterTitleMissing(htmlStr) {
+			continue
+		}
+
+		bodyMatch := reBody.FindStringSubmatchIndex(htmlStr)
+		if len(bodyMatch) >= 2 {
+			bodyTagEnd := bodyMatch[1]
+			title := ch.Title
+			if title == "" {
+				title = fmt.Sprintf("Chương %d", ch.Index+1)
+			}
+			heading := fmt.Sprintf("\n  <h2>%s</h2>", escapeXML(title))
+			newHtml := htmlStr[:bodyTagEnd] + heading + htmlStr[bodyTagEnd:]
+			editedFiles[ch.Path] = []byte(newHtml)
+			*logs = append(*logs, fmt.Sprintf("[Tiêu đề] Đã bổ sung tiêu đề <h2> vào chương: %s (%s)", title, ch.Href))
+		}
+	}
+}
+
 func repairContentDocuments(ctx *BookContext, selected repairSelection, editedFiles map[string][]byte, removedManifestIDs map[string]bool, logs *[]string) {
 	reTags := regexp.MustCompile(`(?i)<(br|hr|img|link|meta)\b([^>]*?)>`)
 	reHtml := regexp.MustCompile(`(?i)<html\b([^>]*?)>`)
@@ -375,22 +418,18 @@ func repairContentDocuments(ctx *BookContext, selected repairSelection, editedFi
 			continue
 		}
 
-		var content []byte
+		var htmlStr string
 		var errRead error
 		if edited, ok := editedFiles[item.FullPath]; ok {
-			content = edited
+			htmlStr = string(edited)
 		} else {
-			f := ctx.Entries[item.FullPath]
-			if f == nil {
-				continue
-			}
-			content, errRead = readZipFile(f)
+			htmlStr, errRead = ctx.readText(item.FullPath)
 			if errRead != nil {
 				continue
 			}
 		}
 
-		originalHTML := string(content)
+		originalHTML := htmlStr
 		fixedHTML := originalHTML
 		xmlFixCount := 0
 
@@ -942,10 +981,10 @@ func repairNCX(ctx *BookContext, validSpineRefs []SpineRef, editedFiles map[stri
 		}
 	}
 
-	if ncxContent == "" {
+	if ncxContent == "" || validateXMLWellFormed(ncxContent) != nil {
 		tocPoints := tocFromSpine(ctx, ncxPath, validSpineRefs)
 		editedFiles[ncxPath] = []byte(ctx.rebuildNCXFromTOC(ncxPath, tocPoints, ctx.Title))
-		*logs = append(*logs, "[Mục lục] Đã tạo mới NCX dựa trên spine.")
+		*logs = append(*logs, "[Mục lục] Đã dựng lại file NCX mới từ danh sách chương do file cũ bị lỗi cú pháp XML hoặc bị trống.")
 		return
 	}
 
@@ -1330,7 +1369,7 @@ func cleanBrokenImages(ctx *BookContext, htmlPath, htmlContent string) (string, 
 	reLink := regexp.MustCompile(`(?is)<link\b[^>]*>`)
 	reLinkHref := regexp.MustCompile(`(?is)\bhref\s*=\s*["']([^"']*)["']`)
 
-	// Clean <img> tags
+
 	cleanedHTML := reImg.ReplaceAllStringFunc(htmlContent, func(imgTag string) string {
 		m := reSrc.FindStringSubmatch(imgTag)
 		if len(m) < 2 {
@@ -1348,7 +1387,7 @@ func cleanBrokenImages(ctx *BookContext, htmlPath, htmlContent string) (string, 
 		return ""
 	})
 
-	// Clean <image> tags
+
 	cleanedHTML = reSvgImage.ReplaceAllStringFunc(cleanedHTML, func(imgTag string) string {
 		m := reHref.FindStringSubmatch(imgTag)
 		if len(m) < 2 {
@@ -1366,7 +1405,6 @@ func cleanBrokenImages(ctx *BookContext, htmlPath, htmlContent string) (string, 
 		return "" 
 	})
 
-	// Clean <link> tags
 	cleanedHTML = reLink.ReplaceAllStringFunc(cleanedHTML, func(linkTag string) string {
 		m := reLinkHref.FindStringSubmatch(linkTag)
 		if len(m) < 2 {
