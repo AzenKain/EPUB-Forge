@@ -870,21 +870,26 @@ function run(params) {
 
       const downloaded = {};
       const failed = {};
-      for (let img = 0; img < imageSources.length; img++) {
-        const src = imageSources[img];
-        const fullImgURL = absolutize(src, chap.url);
-        try {
-          const base64 = session.GetBinaryBase64(fullImgURL, { "Referer": chap.url });
+      if (imageSources.length > 0) {
+        const absoluteURLs = [];
+        for (let img = 0; img < imageSources.length; img++) {
+          absoluteURLs.push(absolutize(imageSources[img], chap.url));
+        }
+        const downloadedMap = session.GetBinariesBase64(absoluteURLs, { "Referer": chap.url }) || {};
+        for (let img = 0; img < imageSources.length; img++) {
+          const src = imageSources[img];
+          const fullImgURL = absoluteURLs[img];
+          const base64 = downloadedMap[fullImgURL];
           if (base64) {
             const ext = getExtFromURL(fullImgURL);
             const internalPath = "images/hako_v" + volume.index + "_" + imageCounter + "." + ext;
             resultImages[internalPath] = base64;
             downloaded[src] = internalPath;
             imageCounter++;
+          } else {
+            failed[src] = true;
+            console.log("  [*] Bỏ qua ảnh không tải được: " + fullImgURL);
           }
-        } catch (e) {
-          failed[src] = true;
-          console.log("  [*] Bỏ qua ảnh không tải được: " + fullImgURL + " (" + e.message + ")");
         }
       }
 
@@ -1061,21 +1066,26 @@ function run(params) {
 
     const downloaded = {};
     const failed = {};
-    for (let img = 0; img < imageSources.length; img++) {
-      const src = imageSources[img];
-      const fullImgURL = absolutize(src, chap.url);
-      try {
-        const base64 = session.GetBinaryBase64(fullImgURL, { "Referer": chap.url });
+    if (imageSources.length > 0) {
+      const absoluteURLs = [];
+      for (let img = 0; img < imageSources.length; img++) {
+        absoluteURLs.push(absolutize(imageSources[img], chap.url));
+      }
+      const downloadedMap = session.GetBinariesBase64(absoluteURLs, { "Referer": chap.url }) || {};
+      for (let img = 0; img < imageSources.length; img++) {
+        const src = imageSources[img];
+        const fullImgURL = absoluteURLs[img];
+        const base64 = downloadedMap[fullImgURL];
         if (base64) {
           const ext = getExtFromURL(fullImgURL);
           const internalPath = "images/hako_" + imageCounter + "." + ext;
           resultImages[internalPath] = base64;
           downloaded[src] = internalPath;
           imageCounter++;
+        } else {
+          failed[src] = true;
+          console.log("  [*] Bỏ qua ảnh không tải được: " + fullImgURL);
         }
-      } catch (e) {
-        failed[src] = true;
-        console.log("  [*] Bỏ qua ảnh không tải được: " + fullImgURL + " (" + e.message + ")");
       }
     }
 

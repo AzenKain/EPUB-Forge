@@ -836,23 +836,29 @@ function downloadAndRewriteImages(session, content, pageUrl, images, prefix, sta
 
   const downloaded = {};
   const failed = {};
-  for (let i = 0; i < imageSources.length; i++) {
-    const src = imageSources[i];
-    const fullURL = absolutize(src, pageUrl);
-    try {
-      const base64 = session.GetBinaryBase64(fullURL, { "Referer": pageUrl });
+  if (imageSources.length > 0) {
+    const absoluteURLs = [];
+    for (let i = 0; i < imageSources.length; i++) {
+      absoluteURLs.push(absolutize(imageSources[i], pageUrl));
+    }
+    const downloadedMap = session.GetBinariesBase64(absoluteURLs, { "Referer": pageUrl }) || {};
+    for (let i = 0; i < imageSources.length; i++) {
+      const src = imageSources[i];
+      const fullURL = absoluteURLs[i];
+      const base64 = downloadedMap[fullURL];
       if (base64) {
         const ext = getExtFromURL(fullURL);
         const internalPath = "images/" + prefix + "_" + counter + "." + ext;
         images[internalPath] = base64;
         downloaded[src] = internalPath;
         counter++;
+      } else {
+        failed[src] = true;
+        console.log("  [*] Bo qua anh khong tai duoc: " + fullURL);
       }
-    } catch (e) {
-      failed[src] = true;
-      console.log("  [*] Bo qua anh khong tai duoc: " + fullURL + " (" + e.message + ")");
     }
   }
+
 
   html = html.replace(imgRegex, function(tag, src) {
     if (downloaded[src]) {

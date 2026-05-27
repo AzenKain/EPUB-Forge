@@ -109,7 +109,7 @@ func (s *Service) getBrowser() (*rod.Browser, error) {
 		l = launcher.New()
 	}
 	headless := strings.ToLower(os.Getenv("EPUBFORGE_HEADLESS")) != "false" && os.Getenv("EPUBFORGE_HEADFUL") == ""
-	u := l.Leakless(false).Headless(headless).MustLaunch()
+	u := l.Leakless(false).Headless(headless).Set("disable-web-security").Set("ignore-certificate-errors").MustLaunch()
 
 	browser := rod.New().ControlURL(u).MustConnect()
 	s.browser = browser
@@ -416,11 +416,60 @@ readResponse:
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		if browserBase64, browserErr := s.getBinaryBase64InPage(urlStr, headers); browserErr == nil && browserBase64 != "" {
+			return browserBase64, nil
+		}
 		return "", fmt.Errorf("lỗi đọc dữ liệu ảnh: %w", err)
 	}
 
 	return base64.StdEncoding.EncodeToString(body), nil
 }
+
+func (s *JSSession) GetBinariesBase64(urlsVal any, headers map[string]string) (map[string]string, error) {
+	var urls []string
+	switch v := urlsVal.(type) {
+	case []string:
+		urls = v
+	case []any:
+		for _, val := range v {
+			if str, ok := val.(string); ok {
+				urls = append(urls, str)
+			}
+		}
+	default:
+		return nil, fmt.Errorf("đầu vào urls phải là một mảng")
+	}
+
+	results := make(map[string]string)
+	var mu sync.Mutex
+
+	sem := make(chan struct{}, 8) // Giới hạn tải 8 ảnh đồng thời
+	var wg sync.WaitGroup
+
+	for _, u := range urls {
+		wg.Add(1)
+		go func(urlStr string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			base64Data, err := s.GetBinaryBase64(urlStr, headers)
+			if err != nil {
+				if s.logWriter != nil {
+					fmt.Fprintf(s.logWriter, "  [!] Tải ảnh thất bại: %s (%v)\n", urlStr, err)
+				}
+				return
+			}
+
+			mu.Lock()
+			results[urlStr] = base64Data
+			mu.Unlock()
+		}(u)
+	}
+	wg.Wait()
+	return results, nil
+}
+
 
 func (s *JSSession) getBinaryBase64InPage(urlStr string, headers map[string]string) (string, error) {
 	if s == nil || s.page == nil {
