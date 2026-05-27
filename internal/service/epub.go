@@ -673,6 +673,19 @@ func parseBookMetadata(opf, fileName string) BookMetadata {
 		}
 	}
 
+	if metadata.Series == "" {
+		seriesMatch := regexp.MustCompile(`(?is)<meta\b[^>]*property=["']belongs-to-collection["'][^>]*>(.*?)</meta>`).FindStringSubmatch(opf)
+		if len(seriesMatch) >= 2 {
+			metadata.Series = cleanText(stripTags(seriesMatch[1]))
+		}
+	}
+	if metadata.SeriesIndex == "" {
+		indexMatch := regexp.MustCompile(`(?is)<meta\b[^>]*property=["']group-position["'][^>]*>(.*?)</meta>`).FindStringSubmatch(opf)
+		if len(indexMatch) >= 2 {
+			metadata.SeriesIndex = cleanText(stripTags(indexMatch[1]))
+		}
+	}
+
 	if metadata.Title == "" {
 		metadata.Title = strings.TrimSuffix(fileName, filepath.Ext(fileName))
 	}
@@ -739,7 +752,32 @@ func applyMetadataToOPF(opf string, metadata BookMetadata) string {
 	}
 	next = upsertCalibreMeta(next, "calibre:series", metadata.Series)
 	next = upsertCalibreMeta(next, "calibre:series_index", metadata.SeriesIndex)
+	next = upsertEPUB3Property(next, "belongs-to-collection", metadata.Series)
+	next = upsertEPUB3Property(next, "group-position", metadata.SeriesIndex)
 	return next
+}
+
+func upsertEPUB3Property(opf, property, value string) string {
+	property = strings.TrimSpace(property)
+	value = strings.TrimSpace(value)
+
+	re := regexp.MustCompile(`(?is)<meta\b[^>]*property\s*=\s*["']` + regexp.QuoteMeta(property) + `["'][^>]*>.*?</meta>`)
+
+	if value == "" {
+		return re.ReplaceAllString(opf, "")
+	}
+
+	newMeta := `<meta property="` + property + `">` + escapeXML(value) + `</meta>`
+	if re.MatchString(opf) {
+		return re.ReplaceAllString(opf, newMeta)
+	}
+
+	idx := metadataRe.FindStringSubmatchIndex(opf)
+	if len(idx) < 8 {
+		return opf
+	}
+	insertAt := idx[6]
+	return opf[:insertAt] + "    " + newMeta + "\n  " + opf[insertAt:]
 }
 
 func upsertSimpleElement(opf, name, value string) string {

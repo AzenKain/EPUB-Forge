@@ -374,6 +374,9 @@ func repairChapterTitles(ctx *BookContext, editedFiles map[string][]byte, logs *
 		if !strings.HasSuffix(lowerPath, ".xhtml") && !strings.HasSuffix(lowerPath, ".html") && !strings.HasSuffix(lowerPath, ".htm") {
 			continue
 		}
+		if isCoverPage(ch) {
+			continue
+		}
 
 		var htmlStr string
 		var errRead error

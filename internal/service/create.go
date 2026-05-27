@@ -630,9 +630,11 @@ func createOPFXML(metadata models.BookMetadata, uuidID, direction string, manife
 	}
 	if strings.TrimSpace(metadata.Series) != "" {
 		extraMetadata.WriteString(fmt.Sprintf("    <meta property=\"belongs-to-collection\">%s</meta>\n", escapeXML(metadata.Series)))
+		extraMetadata.WriteString(fmt.Sprintf("    <meta name=\"calibre:series\" content=\"%s\" />\n", escapeXML(metadata.Series)))
 	}
 	if strings.TrimSpace(metadata.SeriesIndex) != "" {
 		extraMetadata.WriteString(fmt.Sprintf("    <meta property=\"group-position\">%s</meta>\n", escapeXML(metadata.SeriesIndex)))
+		extraMetadata.WriteString(fmt.Sprintf("    <meta name=\"calibre:series_index\" content=\"%s\" />\n", escapeXML(metadata.SeriesIndex)))
 	}
 	if hasCover {
 		extraMetadata.WriteString("    <meta name=\"cover\" content=\"cover-image\" />\n")

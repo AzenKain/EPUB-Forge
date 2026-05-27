@@ -328,6 +328,9 @@ func (ctx *BookContext) validateContentDocuments(b *validationBuilder) {
 		if !strings.HasSuffix(lowerPath, ".xhtml") && !strings.HasSuffix(lowerPath, ".html") && !strings.HasSuffix(lowerPath, ".htm") {
 			continue
 		}
+		if isCoverPage(ch) {
+			continue
+		}
 		text, err := ctx.readText(ch.Path)
 		if err != nil {
 			continue
@@ -415,4 +418,15 @@ func dedupeStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func isCoverPage(ch models.Chapter) bool {
+	lowerTitle := strings.ToLower(ch.Title)
+	lowerPath := strings.ToLower(ch.Path)
+	return lowerTitle == "cover" ||
+		lowerTitle == "trang bìa" ||
+		lowerTitle == "title page" ||
+		lowerTitle == "titlepage" ||
+		strings.Contains(lowerPath, "titlepage") ||
+		strings.Contains(lowerPath, "cover")
 }
