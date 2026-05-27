@@ -24,6 +24,13 @@ interface MergeGroup {
   suggestedTitle: string;
 }
 
+type ParsedTitle = {
+  key: string;
+  alternateKey: string;
+  baseTitle: string;
+  indicator: Indicator;
+};
+
 type TocNode = {
   title: string;
   href: string;
@@ -99,6 +106,20 @@ function stripNoise(value: string): string {
   return text;
 }
 
+function normalizeMergeSubject(value: string): string {
+  return normalizeSpaces(
+    foldText(value)
+      .replace(/&(?:quot|#34|#x22);/gi, " ")
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+  );
+}
+
+function buildAlternateKey(rest: string): string {
+  const subject = normalizeMergeSubject(removeTrailingIndicator(rest));
+  if (subject.length < 8) return "";
+  return `subject:${subject}`;
+}
+
 function normalizePrefixText(prefix: string): string {
   const p = foldText(prefix).trim();
   if (p.startsWith("ch") || p.startsWith("chapter")) return "Chương";
@@ -171,7 +192,7 @@ function parseIndicator(value: string): Indicator {
   return Number.isNaN(number) ? clean : number;
 }
 
-function parseTitle(title: string): { key: string; baseTitle: string; indicator: Indicator } {
+function parseTitle(title: string): ParsedTitle {
   const original = stripNoise(title);
   const text = foldText(original);
 
@@ -186,7 +207,7 @@ function parseTitle(title: string): { key: string; baseTitle: string; indicator:
     const originalRest = original.slice(restStart);
     const baseTitle = buildBaseTitle(original.slice(0, volumePrefix.length), prefix, chapterNumber, originalRest);
     const key = `${foldText(volumePrefix)}${foldText(normalizePrefixText(prefix))} ${chapterNumber}`;
-    return { key, baseTitle, indicator };
+    return { key, alternateKey: buildAlternateKey(originalRest), baseTitle, indicator };
   }
 
   const attachedRegex = new RegExp(`^(${volumePattern})${prefixCapture}\\s*(\\d+)\\.?([a-d])(?=\\s|[:\\-–—.,()[\\]<>（]|$)(.*)$`, "i");
@@ -200,7 +221,7 @@ function parseTitle(title: string): { key: string; baseTitle: string; indicator:
     const originalRest = original.slice(restStart);
     const baseTitle = buildBaseTitle(original.slice(0, volumePrefix.length), prefix, chapterNumber, originalRest);
     const key = `${foldText(volumePrefix)}${foldText(normalizePrefixText(prefix))} ${chapterNumber}`;
-    return { key, baseTitle, indicator };
+    return { key, alternateKey: buildAlternateKey(originalRest), baseTitle, indicator };
   }
 
   const trailingBracket = new RegExp(
@@ -226,13 +247,13 @@ function parseTitle(title: string): { key: string; baseTitle: string; indicator:
       const originalRest = baseOriginal.slice(restStart);
       const baseTitle = buildBaseTitle(baseOriginal.slice(0, volumePrefix.length), prefix, chapterNumber, originalRest);
       const key = `${foldText(volumePrefix)}${foldText(normalizePrefixText(prefix))} ${chapterNumber}`;
-      return { key, baseTitle, indicator: parseIndicator(trailingMatch[1]) };
+      return { key, alternateKey: buildAlternateKey(originalRest), baseTitle, indicator: parseIndicator(trailingMatch[1]) };
     }
 
-    return { key: baseFolded, baseTitle: baseOriginal, indicator: parseIndicator(trailingMatch[1]) };
+    return { key: baseFolded, alternateKey: buildAlternateKey(baseOriginal), baseTitle: baseOriginal, indicator: parseIndicator(trailingMatch[1]) };
   }
 
-  return { key: "", baseTitle: original, indicator: null };
+  return { key: "", alternateKey: "", baseTitle: original, indicator: null };
 }
 
 function titleQualityScore(title: string): number {
@@ -261,8 +282,10 @@ export function AutoMergeModal({
   onSetError
 }: Props) {
   const detectedGroups = useMemo(() => {
-    const groups: Record<string, ChapterWithIndicator[]> = {};
-    const groupTitles: Record<string, string> = {};
+    const primaryGroups: Record<string, ChapterWithIndicator[]> = {};
+    const primaryTitles: Record<string, string> = {};
+    const fallbackGroups: Record<string, ChapterWithIndicator[]> = {};
+    const fallbackTitles: Record<string, string> = {};
 
     chapters.forEach((chapter) => {
       const parsed = parseTitle(chapter.title);
@@ -273,15 +296,22 @@ export function AutoMergeModal({
         indicator: parsed.indicator
       };
 
-      if (!groups[parsed.key]) groups[parsed.key] = [];
-      groups[parsed.key].push(item);
-      groupTitles[parsed.key] = chooseGroupTitle(groupTitles[parsed.key], parsed.baseTitle);
+      if (!primaryGroups[parsed.key]) primaryGroups[parsed.key] = [];
+      primaryGroups[parsed.key].push(item);
+      primaryTitles[parsed.key] = chooseGroupTitle(primaryTitles[parsed.key], parsed.baseTitle);
+
+      if (parsed.alternateKey) {
+        if (!fallbackGroups[parsed.alternateKey]) fallbackGroups[parsed.alternateKey] = [];
+        fallbackGroups[parsed.alternateKey].push(item);
+        fallbackTitles[parsed.alternateKey] = chooseGroupTitle(fallbackTitles[parsed.alternateKey], parsed.baseTitle);
+      }
     });
 
     const result: MergeGroup[] = [];
-    for (const key of Object.keys(groups)) {
-      if (groups[key].length < 2) continue;
-      const sorted = [...groups[key]].sort((a, b) => {
+    const claimedIndices = new Set<number>();
+    const pushGroup = (key: string, group: ChapterWithIndicator[], suggestedTitle: string) => {
+      if (group.length < 2) return false;
+      const sorted = [...group].sort((a, b) => {
         const rankA = getIndicatorRank(a.indicator);
         const rankB = getIndicatorRank(b.indicator);
         if (rankA !== rankB) return rankA - rankB;
@@ -290,8 +320,20 @@ export function AutoMergeModal({
       result.push({
         key,
         chapters: sorted,
-        suggestedTitle: groupTitles[key]
+        suggestedTitle
       });
+      sorted.forEach((chapter) => claimedIndices.add(chapter.index));
+      return true;
+    };
+
+    for (const key of Object.keys(primaryGroups)) {
+      pushGroup(key, primaryGroups[key], primaryTitles[key]);
+    }
+
+    for (const key of Object.keys(fallbackGroups)) {
+      const group = fallbackGroups[key];
+      if (group.some((chapter) => claimedIndices.has(chapter.index))) continue;
+      pushGroup(key, group, fallbackTitles[key]);
     }
 
     return result.sort((a, b) => a.chapters[0].index - b.chapters[0].index);

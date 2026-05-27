@@ -524,6 +524,18 @@ func (ctx *BookContext) EditChapters(action string, index int, targetIndex int, 
 			navHTML = reorderNavLIsByChapters(navHTML, ctx.Chapters, newChapters, posixDir(navPath))
 			editedFiles[navPath] = []byte(navHTML)
 		}
+
+		for _, item := range ctx.Manifest {
+			if item.FullPath == navPath || !isVisibleTOCPage(item) {
+				continue
+			}
+			visibleTOCHTML, err := ctx.readText(item.FullPath)
+			if err != nil {
+				continue
+			}
+			visibleTOCHTML = reorderNavLIsByChapters(visibleTOCHTML, ctx.Chapters, newChapters, posixDir(item.FullPath))
+			editedFiles[item.FullPath] = []byte(visibleTOCHTML)
+		}
 	case "add":
 
 		chapterTitle := "Chương mới"

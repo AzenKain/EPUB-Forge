@@ -31,13 +31,19 @@ const targets = {
 };
 
 const argTarget = process.argv[2] || "all";
+const releaseVersion = (process.env.RELEASE_VERSION || "").trim();
 
 if (argTarget === "all" || argTarget === "windows") {
-  if (fs.existsSync("logo.ico") && fs.existsSync("app_info.json")) {
+  const iconPath = fs.existsSync("logo.ico") ? "logo.ico" : "public/logo.ico";
+  if (fs.existsSync(iconPath) && fs.existsSync("app_info.json")) {
     console.log("Embedding Windows application icon and metadata...");
     try {
       const appInfo = JSON.parse(fs.readFileSync("app_info.json", "utf8"));
-      execSync(`go run github.com/tc-hib/go-winres@latest simply --icon logo.ico --manifest gui --product-name "${appInfo.productName}" --product-version "${appInfo.productVersion}" --file-version "${appInfo.fileVersion}" --file-description "${appInfo.fileDescription}" --copyright "${appInfo.copyright}" --out cmd/epubforge/rsrc --arch amd64,386,arm64`, { stdio: "inherit" });
+      if (releaseVersion) {
+        appInfo.productVersion = releaseVersion;
+        appInfo.fileVersion = releaseVersion;
+      }
+      execSync(`go run github.com/tc-hib/go-winres@latest simply --icon "${iconPath}" --manifest gui --product-name "${appInfo.productName}" --product-version "${appInfo.productVersion}" --file-version "${appInfo.fileVersion}" --file-description "${appInfo.fileDescription}" --copyright "${appInfo.copyright}" --out cmd/epubforge/rsrc --arch amd64,386,arm64`, { stdio: "inherit" });
     } catch (e) {
       console.warn("Failed to embed Windows resources, skipping:", e.message);
     }
@@ -49,7 +55,8 @@ function buildBinary(config) {
   console.log(`Building for OS=${config.GOOS} Arch=${config.GOARCH} -> ${outputPath}...`);
 
   try {
-    execSync(`go build -trimpath -ldflags="-s -w" -o "${outputPath}" ./cmd/epubforge`, {
+    const versionFlag = releaseVersion ? ` -X main.Version=${releaseVersion}` : "";
+    execSync(`go build -trimpath -ldflags="-s -w${versionFlag}" -o "${outputPath}" ./cmd/epubforge`, {
       env: {
         ...process.env,
         GOOS: config.GOOS,

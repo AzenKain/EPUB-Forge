@@ -10,6 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 
 	"epubforge/internal/models"
 	"epubforge/internal/service"
@@ -632,9 +633,19 @@ func (c *Controller) RunExtension(w http.ResponseWriter, r *http.Request) {
 type responseLogWriter struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
+	mu      sync.Mutex
 }
 
 func (rlw *responseLogWriter) Write(p []byte) (n int, err error) {
+	rlw.mu.Lock()
+	defer rlw.mu.Unlock()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			n = 0
+			err = http.ErrAbortHandler
+		}
+	}()
+
 	trimmed := bytes.TrimSpace(p)
 	if len(trimmed) > 1 && trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}' {
 		var js json.RawMessage

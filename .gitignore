@@ -1,6 +1,7 @@
 *.epub
 dist-native/
 node_modules/
+.vscode/
 dist/
 output/
 scratch/
