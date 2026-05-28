@@ -1,10 +1,10 @@
-# Prebuild Version 2.2
+# Prebuild Version 2.3
 
 ## Thay đổi chính
 
-- Sửa lỗi crash khi extension tải nhiều ảnh song song và stream log về UI.
-- Cập nhật trang mục lục hiển thị khi kéo thả đổi vị trí chương.
-- Cải thiện quét gộp tự động cho các chương có cùng subtitle và hậu tố `(1)`, `(2)`, `(3)`.
+- **Cải tiến Extension Hako (`hako2epub.js`)**:
+  - Hỗ trợ cơ chế so khớp Story ID động, giúp nhận diện chương thành công ngay cả khi liên kết truyện nhập vào chứa lỗi chính tả slug (ví dụ: `...-nuai` thay vì `...-nua`).
+  - Tự động chuẩn hóa và chuyển hướng sang URL canonical/chuẩn từ HTML của trang truyện.
 
 ## Ghi chú
 

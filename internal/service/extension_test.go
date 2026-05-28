@@ -88,3 +88,4 @@ func TestExtensionChoiceFlow(t *testing.T) {
 		t.Fatal("timed out waiting for selected choice")
 	}
 }
+

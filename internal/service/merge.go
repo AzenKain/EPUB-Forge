@@ -37,6 +37,7 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 			b.Close()
 		}
 	}()
+	mergedMetadata := metadataForMergedBook(books, mergedTitle)
 
 	cleanTitle := sanitizeFileName(mergedTitle)
 	outputName := cleanTitle + ".epub"
@@ -214,19 +215,6 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 		return "", err
 	}
 
-	var creatorStr string
-	var langStr string
-	if len(books) > 0 {
-		creatorStr = books[0].Metadata.Creator
-		langStr = books[0].Metadata.Language
-	}
-	if creatorStr == "" {
-		creatorStr = "Combined Authors"
-	}
-	if langStr == "" {
-		langStr = "vi"
-	}
-
 	var manifestBuilder strings.Builder
 
 	manifestBuilder.WriteString(`    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />` + "\n")
@@ -246,6 +234,7 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 		spineBuilder.WriteString("\n")
 	}
 
+	extraMetadata := mergeExtraMetadataXML(mergedMetadata, mergedCoverID)
 	opfXML := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="pub-id" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -253,19 +242,18 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
     <dc:creator>%s</dc:creator>
     <dc:language>%s</dc:language>
     <dc:identifier id="pub-id">%s</dc:identifier>
-%s
-    <meta property="dcterms:modified">%s</meta>
+%s    <meta property="dcterms:modified">%s</meta>
   </metadata>
   <manifest>
 %s  </manifest>
   <spine toc="ncx">
 %s  </spine>
 </package>`,
-		escapeXML(mergedTitle),
-		escapeXML(creatorStr),
-		escapeXML(langStr),
+		escapeXML(mergedMetadata.Title),
+		escapeXML(mergedMetadata.Creator),
+		escapeXML(mergedMetadata.Language),
 		"uuid-"+randomID(),
-		coverMetaTag(mergedCoverID),
+		extraMetadata,
 		time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 		manifestBuilder.String(),
 		spineBuilder.String(),
@@ -295,7 +283,7 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 	ncxBuilder.WriteString(`    <meta name="dtb:maxPageNumber" content="0"/>` + "\n")
 	ncxBuilder.WriteString("  </head>\n")
 	ncxBuilder.WriteString("  <docTitle><text>")
-	ncxBuilder.WriteString(escapeXML(mergedTitle))
+	ncxBuilder.WriteString(escapeXML(mergedMetadata.Title))
 	ncxBuilder.WriteString("</text></docTitle>\n")
 	ncxBuilder.WriteString("  <navMap>\n")
 
@@ -341,4 +329,48 @@ func (s *Service) MergeEpubs(bookIDs []string, mergedTitle string) (string, erro
 	}
 
 	return outputName, nil
+}
+
+func metadataForMergedBook(books []*BookContext, mergedTitle string) BookMetadata {
+	fallback := BookMetadata{
+		Title:    strings.TrimSpace(mergedTitle),
+		Creator:  "Combined Authors",
+		Language: "vi",
+	}
+	if fallback.Title == "" {
+		fallback.Title = "Combined Book"
+	}
+
+	metadata := fallback
+	if len(books) > 0 {
+		metadata = books[0].Metadata
+		metadata.Title = fallback.Title
+	}
+	return normalizeMetadata(metadata, fallback)
+}
+
+func mergeExtraMetadataXML(metadata BookMetadata, coverID string) string {
+	var b strings.Builder
+	if publisher := strings.TrimSpace(metadata.Publisher); publisher != "" {
+		b.WriteString(fmt.Sprintf("    <dc:publisher>%s</dc:publisher>\n", escapeXML(publisher)))
+	}
+	if description := strings.TrimSpace(metadata.Description); description != "" {
+		b.WriteString(fmt.Sprintf("    <dc:description>%s</dc:description>\n", escapeXML(description)))
+	}
+	if subject := strings.TrimSpace(metadata.Subject); subject != "" {
+		b.WriteString(fmt.Sprintf("    <dc:subject>%s</dc:subject>\n", escapeXML(subject)))
+	}
+	if series := strings.TrimSpace(metadata.Series); series != "" {
+		b.WriteString(fmt.Sprintf("    <meta property=\"belongs-to-collection\">%s</meta>\n", escapeXML(series)))
+		b.WriteString(fmt.Sprintf("    <meta name=\"calibre:series\" content=\"%s\"/>\n", escapeXML(series)))
+	}
+	if seriesIndex := strings.TrimSpace(metadata.SeriesIndex); seriesIndex != "" {
+		b.WriteString(fmt.Sprintf("    <meta property=\"group-position\">%s</meta>\n", escapeXML(seriesIndex)))
+		b.WriteString(fmt.Sprintf("    <meta name=\"calibre:series_index\" content=\"%s\"/>\n", escapeXML(seriesIndex)))
+	}
+	if coverTag := coverMetaTag(coverID); coverTag != "" {
+		b.WriteString(coverTag)
+		b.WriteString("\n")
+	}
+	return b.String()
 }

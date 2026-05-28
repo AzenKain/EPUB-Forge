@@ -154,9 +154,19 @@ function hakoStoryRootFromURL(url) {
   return "/" + match[1] + "/" + match[2];
 }
 
+function hakoStoryIdFromURL(url) {
+  const path = hakoPathFromURL(url);
+  const match = path.match(/^\/([^\/]+)\/(\d+)/i);
+  return match ? match[1] + "-" + match[2] : "";
+}
+
 function isSameHakoStoryURL(url, pageUrl) {
   const parts = parseAbsoluteURL(url);
   if (!parts || !isSupportedHakoHost(parts.host)) return false;
+
+  const id1 = hakoStoryIdFromURL(url);
+  const id2 = hakoStoryIdFromURL(pageUrl);
+  if (id1 && id2) return id1 === id2;
 
   const root = hakoStoryRootFromURL(pageUrl);
   const path = hakoPathFromURL(url);
@@ -734,7 +744,7 @@ function waitAfterHakoResponse(resp, fallbackMs) {
 function run(params) {
   const baseUrl = hakoOriginFromURL(params.url);
   const session = http.newSession();
-  const storyUrl = absolutize(normalizeHakoInputURL(params.url), baseUrl);
+  let storyUrl = absolutize(normalizeHakoInputURL(params.url), baseUrl);
 
   console.log("[*] Hako domain: " + baseUrl);
   console.log("[*] Đang mở trang đăng nhập Hako...");
@@ -782,6 +792,21 @@ function run(params) {
   }
   if (isLoginPage(seriesResp.Body)) {
     throw new Error("Đăng nhập thất bại hoặc phiên đăng nhập không còn hợp lệ.");
+  }
+
+  let canonicalUrl = extractMeta(seriesResp.Body, "og:url");
+  if (!canonicalUrl) {
+    const canonicalMatch = seriesResp.Body.match(/<link\b[^>]*rel=['"]canonical['"][^>]*>/i);
+    if (canonicalMatch) {
+      canonicalUrl = attrValue(canonicalMatch[0], "href");
+    }
+  }
+  if (canonicalUrl) {
+    canonicalUrl = absolutize(canonicalUrl, storyUrl);
+    if (canonicalUrl !== storyUrl) {
+      console.log("[*] Tự động cập nhật URL chính xác: " + canonicalUrl);
+      storyUrl = canonicalUrl;
+    }
   }
 
   const title = extractTitle(seriesResp.Body);
