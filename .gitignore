@@ -9,3 +9,4 @@ edit/
 *.exe
 *.exe~
 *.log
+/internal/service/real_crawl_credentials_test.go

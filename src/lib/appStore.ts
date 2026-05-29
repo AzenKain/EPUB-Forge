@@ -36,6 +36,7 @@ type AppStore = {
   error: string;
   notice: string;
   sidebarCollapsed: boolean;
+  volumesCollapsed: boolean;
   metadataOpen: boolean;
   fontOpen: boolean;
   exportProgress: ExportProgress | null;
@@ -56,6 +57,7 @@ type AppStore = {
   setError: Setter<string>;
   setNotice: Setter<string>;
   setSidebarCollapsed: Setter<boolean>;
+  setVolumesCollapsed: Setter<boolean>;
   setMetadataOpen: Setter<boolean>;
   setFontOpen: Setter<boolean>;
   setExportProgress: Setter<ExportProgress | null>;
@@ -78,6 +80,7 @@ export const useAppStore = create<AppStore>((set) => ({
   error: "",
   notice: "",
   sidebarCollapsed: false,
+  volumesCollapsed: false,
   metadataOpen: false,
   fontOpen: false,
   exportProgress: null,
@@ -104,6 +107,8 @@ export const useAppStore = create<AppStore>((set) => ({
   setNotice: (value) => set((state) => ({ notice: resolveValue(value, state.notice) })),
   setSidebarCollapsed: (value) =>
     set((state) => ({ sidebarCollapsed: resolveValue(value, state.sidebarCollapsed) })),
+  setVolumesCollapsed: (value) =>
+    set((state) => ({ volumesCollapsed: resolveValue(value, state.volumesCollapsed) })),
   setMetadataOpen: (value) => set((state) => ({ metadataOpen: resolveValue(value, state.metadataOpen) })),
   setFontOpen: (value) => set((state) => ({ fontOpen: resolveValue(value, state.fontOpen) })),
   setExportProgress: (value) =>

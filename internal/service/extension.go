@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -80,6 +81,7 @@ type JSSession struct {
 	logWriter io.Writer
 	runID     string
 	page      *rod.Page
+	jar       http.CookieJar
 }
 
 type JSSessionResponse struct {
@@ -164,11 +166,13 @@ func (s *Service) NewJSSession(logWriter io.Writer, runID string) (*JSSession, e
 	}
 	s.activeRunsMu.Unlock()
 
+	jar, _ := cookiejar.New(nil)
 	return &JSSession{
 		svc:       s,
 		logWriter: logWriter,
 		runID:     runID,
 		page:      page,
+		jar:       jar,
 	}, nil
 }
 
@@ -271,6 +275,203 @@ func (s *JSSession) HasCookie(cookieName string) bool {
 		}
 	}
 	return false
+}
+
+func (s *JSSession) GetFast(urlStr string, headers map[string]string) (*JSSessionResponse, error) {
+	resp, err := s.requestFast("GET", urlStr, nil, headers)
+	if err != nil || isCloudflareResponse(resp) {
+		if s.logWriter != nil {
+			var reason string
+			if err != nil {
+				reason = fmt.Sprintf("lỗi (%v)", err)
+			} else if resp != nil {
+				reason = fmt.Sprintf("phát hiện Cloudflare (Status: %d)", resp.Status)
+			} else {
+				reason = "không phản hồi"
+			}
+			fmt.Fprintf(s.logWriter, "  [*] GetFast thất bại do %s, chuyển sang dùng trình duyệt ảo: %s\n", reason, urlStr)
+		}
+		return s.Get(urlStr, headers)
+	}
+	return resp, nil
+}
+
+func (s *JSSession) PostFast(urlStr string, payload any, headers map[string]string) (*JSSessionResponse, error) {
+	resp, err := s.requestFast("POST", urlStr, payload, headers)
+	if err != nil || isCloudflareResponse(resp) {
+		if s.logWriter != nil {
+			var reason string
+			if err != nil {
+				reason = fmt.Sprintf("lỗi (%v)", err)
+			} else if resp != nil {
+				reason = fmt.Sprintf("phát hiện Cloudflare (Status: %d)", resp.Status)
+			} else {
+				reason = "không phản hồi"
+			}
+			fmt.Fprintf(s.logWriter, "  [*] PostFast thất bại do %s, chuyển sang dùng trình duyệt ảo: %s\n", reason, urlStr)
+		}
+		return s.Post(urlStr, payload, headers)
+	}
+	return resp, nil
+}
+
+func isCloudflareResponse(resp *JSSessionResponse) bool {
+	if resp == nil {
+		return true
+	}
+	if resp.Status == 403 || resp.Status == 503 || resp.Status == 429 {
+		return true
+	}
+	html := resp.Body
+	if strings.Contains(html, "challenge-form") || 
+		strings.Contains(html, "/cdn-cgi/challenge-platform/") || 
+		strings.Contains(html, "cf-challenge") || 
+		strings.Contains(html, "cf-turnstile") || 
+		strings.Contains(html, "Just a moment...") || 
+		strings.Contains(html, "turnstile-wrapper") {
+		return true
+	}
+	return false
+}
+
+func (s *JSSession) requestFast(method string, urlStr string, payload any, headers map[string]string) (*JSSessionResponse, error) {
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Jar:     s.jar,
+	}
+
+	// 1. Đồng bộ cookies từ Chrome ảo vào Go CookieJar trước khi request
+	parsedURL, _ := url.Parse(urlStr)
+	if parsedURL != nil {
+		cookies, cerr := s.page.Cookies(nil)
+		if cerr == nil && len(cookies) > 0 {
+			var httpCookies []*http.Cookie
+			for _, c := range cookies {
+				domain := c.Domain
+				if domain == "" {
+					domain = parsedURL.Hostname()
+				}
+				httpCookies = append(httpCookies, &http.Cookie{
+					Name:   c.Name,
+					Value:  c.Value,
+					Domain: domain,
+					Path:   c.Path,
+				})
+			}
+			s.jar.SetCookies(parsedURL, httpCookies)
+		}
+	}
+
+	var bodyReader io.Reader
+	if payload != nil && method == "POST" {
+		if isFormURLEncoded(headers) {
+			formValues, ok := payloadToStringMap(payload)
+			if ok {
+				data := url.Values{}
+				for k, v := range formValues {
+					data.Set(k, v)
+				}
+				bodyReader = strings.NewReader(data.Encode())
+			}
+		} else {
+			jsonData, err := json.Marshal(payload)
+			if err == nil {
+				bodyReader = bytes.NewReader(jsonData)
+			}
+		}
+	}
+
+	req, err := http.NewRequest(method, urlStr, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("lỗi tạo request thô: %w", err)
+	}
+
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		if altServerName := tlsAlternativeServerName(err); altServerName != "" {
+			if s.logWriter != nil {
+				fmt.Fprintf(s.logWriter, "  [*] (Fast) Phát hiện lỗi chứng chỉ tên miền (%s), thử lại với SNI %s...\n", req.URL.Host, altServerName)
+			}
+			retryReq := req.Clone(req.Context())
+			if payload != nil && method == "POST" {
+				if isFormURLEncoded(headers) {
+					formValues, _ := payloadToStringMap(payload)
+					data := url.Values{}
+					for k, v := range formValues {
+						data.Set(k, v)
+					}
+					retryReq.Body = io.NopCloser(strings.NewReader(data.Encode()))
+				} else {
+					jsonData, _ := json.Marshal(payload)
+					retryReq.Body = io.NopCloser(bytes.NewReader(jsonData))
+				}
+			}
+			retryClient := &http.Client{
+				Timeout: 30 * time.Second,
+				Jar:     s.jar,
+				Transport: &http.Transport{
+					Proxy:           http.ProxyFromEnvironment,
+					TLSClientConfig: &tls.Config{ServerName: altServerName},
+				},
+			}
+			resp, err = retryClient.Do(retryReq)
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("lỗi request thô: %w", err)
+		}
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("lỗi đọc phản hồi thô: %w", err)
+	}
+
+	// 2. Đồng bộ ngược lại cookies từ Go CookieJar vào Chrome ảo sau khi nhận response
+	if parsedURL != nil {
+		httpCookies := s.jar.Cookies(parsedURL)
+		if len(httpCookies) > 0 {
+			var protoCookies []*proto.NetworkCookieParam
+			for _, c := range httpCookies {
+				domain := c.Domain
+				if domain == "" {
+					domain = parsedURL.Hostname()
+				}
+				expires := proto.TimeSinceEpoch(c.Expires.Unix())
+				protoCookies = append(protoCookies, &proto.NetworkCookieParam{
+					Name:     c.Name,
+					Value:    c.Value,
+					Domain:   domain,
+					Path:     c.Path,
+					Secure:   c.Secure,
+					HTTPOnly: c.HttpOnly,
+					Expires:  expires,
+				})
+			}
+			_ = s.page.SetCookies(protoCookies)
+		}
+	}
+
+	respHeaders := make(map[string]string)
+	for k, v := range resp.Header {
+		if len(v) > 0 {
+			respHeaders[strings.ToLower(k)] = v[0]
+		}
+	}
+
+	return &JSSessionResponse{
+		Status:  resp.StatusCode,
+		Body:    string(bodyBytes),
+		Headers: respHeaders,
+	}, nil
 }
 
 func isFormURLEncoded(headers map[string]string) bool {
@@ -382,16 +583,16 @@ func (s *JSSession) GetBinaryBase64(urlStr string, headers map[string]string) (s
 
 	resp, err := client.Do(req)
 	if err != nil {
-		if shouldRetryJukazaImageTLS(req.URL, err) {
+		if altServerName := tlsAlternativeServerName(err); altServerName != "" {
 			if s.logWriter != nil {
-				fmt.Fprintf(s.logWriter, "  [*] Host img.jukaza.site đang dùng certificate của jukaza.site, thử lại với SNI jukaza.site...\n")
+				fmt.Fprintf(s.logWriter, "  [*] Phát hiện lỗi chứng chỉ tên miền (%s), thử lại với SNI %s...\n", req.URL.Host, altServerName)
 			}
 			retryReq := req.Clone(req.Context())
 			retryClient := &http.Client{
 				Timeout: 30 * time.Second,
 				Transport: &http.Transport{
 					Proxy:           http.ProxyFromEnvironment,
-					TLSClientConfig: &tls.Config{ServerName: "jukaza.site"},
+					TLSClientConfig: &tls.Config{ServerName: altServerName},
 				},
 			}
 			resp, err = retryClient.Do(retryReq)
@@ -443,7 +644,7 @@ func (s *JSSession) GetBinariesBase64(urlsVal any, headers map[string]string) (m
 	results := make(map[string]string)
 	var mu sync.Mutex
 
-	sem := make(chan struct{}, 8) // Giới hạn tải 8 ảnh đồng thời
+	sem := make(chan struct{}, 8) 
 	var wg sync.WaitGroup
 
 	for _, u := range urls {
@@ -469,7 +670,6 @@ func (s *JSSession) GetBinariesBase64(urlsVal any, headers map[string]string) (m
 	wg.Wait()
 	return results, nil
 }
-
 
 func (s *JSSession) getBinaryBase64InPage(urlStr string, headers map[string]string) (string, error) {
 	if s == nil || s.page == nil {
@@ -503,12 +703,17 @@ func (s *JSSession) getBinaryBase64InPage(urlStr string, headers map[string]stri
 	return base64Str, nil
 }
 
-func shouldRetryJukazaImageTLS(parsedURL *url.URL, err error) bool {
-	if parsedURL == nil || strings.ToLower(parsedURL.Hostname()) != "img.jukaza.site" {
-		return false
-	}
+func tlsAlternativeServerName(err error) string {
 	var hostnameErr x509.HostnameError
-	return errors.As(err, &hostnameErr)
+	if errors.As(err, &hostnameErr) && hostnameErr.Certificate != nil {
+		if len(hostnameErr.Certificate.DNSNames) > 0 {
+			return hostnameErr.Certificate.DNSNames[0]
+		}
+		if hostnameErr.Certificate.Subject.CommonName != "" {
+			return hostnameErr.Certificate.Subject.CommonName
+		}
+	}
+	return ""
 }
 
 func (s *JSSession) isCloudflareActive() bool {
@@ -516,7 +721,27 @@ func (s *JSSession) isCloudflareActive() bool {
 	if err != nil {
 		return false
 	}
-	title := info.Title
+	title := strings.TrimSpace(info.Title)
+
+	isTitleCF := title == "Just a moment..." || title == "Cloudflare"
+
+	var isDomCF bool
+	res, err := s.page.Evaluate(rod.Eval(`() => {
+		if (window._cf_chl_opt) return true;
+		const form = document.getElementById('challenge-form');
+		if (form && form.action && form.action.includes('/cdn-cgi/')) return true;
+		if (document.querySelector('script[src*="/cdn-cgi/challenge-platform/"]')) return true;
+		if (document.getElementById('cf-challenge') || document.querySelector('.cf-challenge') || document.getElementById('turnstile-wrapper')) return true;
+		return false;
+	}`))
+	if err == nil && res != nil {
+		_ = res.Value.Unmarshal(&isDomCF)
+	}
+
+	if !isDomCF && !isTitleCF {
+		return false
+	}
+
 	html, err := s.page.HTML()
 	if err != nil {
 		return false
@@ -524,27 +749,8 @@ func (s *JSSession) isCloudflareActive() bool {
 	if isVisibleLoginFormHTML(html) {
 		return false
 	}
-	if isReadableHakoHTML(html) {
-		return false
-	}
-	if strings.Contains(title, "Just a moment...") || strings.Contains(title, "Cloudflare") {
-		return true
-	}
-	if strings.Contains(html, "cf-challenge") || strings.Contains(html, "challenge-platform") || strings.Contains(html, "cf-turnstile") {
-		return true
-	}
-	return false
-}
 
-func isReadableHakoHTML(html string) bool {
-	lower := strings.ToLower(html)
-	return strings.Contains(lower, `id="chapter-content"`) ||
-		strings.Contains(lower, `id='chapter-content'`) ||
-		strings.Contains(lower, `id="chapter-c-protected"`) ||
-		strings.Contains(lower, `id='chapter-c-protected'`) ||
-		strings.Contains(lower, "list-chapters") ||
-		strings.Contains(lower, "volume-list") ||
-		strings.Contains(lower, "series-name")
+	return true
 }
 
 func isVisibleLoginFormHTML(html string) bool {

@@ -52,6 +52,7 @@ function App() {
     error,
     notice,
     sidebarCollapsed,
+    volumesCollapsed,
     metadataOpen,
     fontOpen,
     exportProgress,
@@ -72,6 +73,7 @@ function App() {
     setError,
     setNotice,
     setSidebarCollapsed,
+    setVolumesCollapsed,
     setMetadataOpen,
     setFontOpen,
     setExportProgress,
@@ -634,7 +636,7 @@ function App() {
             {error ? <div className="error">{error}</div> : null}
             {notice ? <div className="notice">{notice}</div> : null}
 
-            <div className="grid">
+            <div className={volumesCollapsed ? "grid volumesCollapsed" : "grid"}>
               <ChaptersPanel
                 bookId={analysis.id}
                 chapters={analysis.spine}
@@ -687,6 +689,8 @@ function App() {
                 onRemoveRange={removeRange}
                 onIncludeFrontmatterChange={setIncludeFrontmatter}
                 onExport={exportSelected}
+                collapsed={volumesCollapsed}
+                onToggle={() => setVolumesCollapsed((current) => !current)}
               />
             </div>
 

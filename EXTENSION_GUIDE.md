@@ -304,6 +304,72 @@ const resp = session.Post("https://example.com/api/bookmark", {
 
 ---
 
+### `session.GetFast(url, headers)`
+
+Gửi một HTTP GET request thô (Raw HTTP Request) sử dụng Go `http.Client` thay vì điều hướng trình duyệt Chrome ảo. 
+
+Phương thức này nhanh hơn **gấp 10-30 lần** so với `session.Get` thông thường vì nó loại bỏ hoàn toàn các overhead liên quan đến dựng layout, CSS, tải Font hay thực thi Javascript của trình duyệt Chrome ảo.
+
+> [!NOTE]
+> **Tự động đồng bộ Cookie hai chiều**: Trước khi gửi request, `GetFast` tự động lấy các cookie hiện có của trình duyệt Chrome ảo để đính kèm vào request. Sau khi nhận phản hồi, bất kỳ cookie mới nào (`Set-Cookie`) cũng được tự động lưu ngược trở lại Chrome ảo để duy trì trạng thái đăng nhập đồng nhất.
+
+**Hạn chế:**
+- Không chạy bất kỳ mã Javascript nào trên trang web đích (không dùng được cho các trang Single Page App hiển thị nội dung động qua React/Vue sau khi tải).
+- Không tự động bypass các rào cản Cloudflare Turnstile hay Captcha. Nếu gặp Cloudflare, request sẽ lỗi hoặc trả về trang chờ.
+
+**Tham số:**
+
+| Tham số | Kiểu | Mô tả |
+|---------|------|-------|
+| `url` | `string` | URL đích |
+| `headers` | `object` | HTTP headers tùy chọn |
+
+**Trả về:** Object `Response` (cấu trúc giống hệt `session.Get`)
+
+**Ví dụ:**
+```javascript
+const resp = session.GetFast("https://example.com/truyen/ten-truyen/chuong-1", {
+  "Referer": "https://example.com/truyen/ten-truyen"
+});
+if (resp.Status === 200) {
+  const html = resp.Body; // HTML của chương
+}
+```
+
+---
+
+### `session.PostFast(url, payload, headers)`
+
+Gửi một HTTP POST request thô sử dụng Go `http.Client`. Tương tự `GetFast`, phương thức này không sử dụng trình duyệt ảo nên có tốc độ thực thi rất nhanh.
+
+**Quy tắc encoding payload:**
+
+| Content-Type Header | Encoding |
+|---------------------|----------|
+| `"application/json"` | `JSON.stringify(payload)` |
+| Khác hoặc không set | `x-www-form-urlencoded` (key=value&key2=value2) |
+
+**Tham số:**
+
+| Tham số | Kiểu | Mô tả |
+|---------|------|-------|
+| `url` | `string` | URL đích |
+| `payload` | `object` | Dữ liệu gửi đi |
+| `headers` | `object` | HTTP headers tùy chọn |
+
+**Trả về:** Object `Response` (cấu trúc giống hệt `session.Get`)
+
+**Ví dụ:**
+```javascript
+const resp = session.PostFast("https://example.com/api/v1/bookmark", {
+  chapter_id: 1234
+}, {
+  "Content-Type": "application/json"
+});
+```
+
+---
+
 ### `session.GetBinaryBase64(url, headers)`
 
 Tải tài nguyên nhị phân (ảnh, font, v.v.) sử dụng cookie session của trình duyệt.

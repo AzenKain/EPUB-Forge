@@ -564,6 +564,8 @@ API có sẵn trong extension:
 - `http.newSession()`: tạo phiên trình duyệt/headless browser.
 - `session.Get(url, headers)`: mở trang hoặc gọi request.
 - `session.Post(url, payload, headers)`: gửi POST.
+- `session.GetFast(url, headers)`: gửi GET thô siêu nhanh sử dụng Go HTTP client, tự động đồng bộ cookie hai chiều và tự động fallback về trình duyệt ảo nếu gặp Cloudflare.
+- `session.PostFast(url, payload, headers)`: gửi POST thô siêu nhanh sử dụng Go HTTP client, tự động đồng bộ cookie hai chiều và tự động fallback về trình duyệt ảo nếu gặp Cloudflare.
 - `session.GetBinaryBase64(url, headers)`: tải ảnh/font dạng base64.
 - `session.HasCookie(name)`: kiểm tra cookie.
 - `console.log(...)`: gửi log về UI.

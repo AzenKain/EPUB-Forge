@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Download, Layers, Plus, Scissors, Trash2, Image as ImageIcon } from "lucide-react";
+import { Download, Layers, Plus, Scissors, Trash2, Image as ImageIcon, PanelRightClose, PanelRightOpen } from "lucide-react";
 import type { BookAnalysis, ExportRange, ExportedFile } from "../lib/types";
 import { clamp, detectSummary, formatBytes } from "../lib/format";
 import { CoverModal } from "./CoverModal";
@@ -17,6 +17,8 @@ type Props = {
   onRemoveRange: (index: number) => void;
   onIncludeFrontmatterChange: (value: boolean) => void;
   onExport: () => void;
+  collapsed: boolean;
+  onToggle: () => void;
 };
 
 export function VolumesPanel({
@@ -31,7 +33,9 @@ export function VolumesPanel({
   onUpdateRange,
   onRemoveRange,
   onIncludeFrontmatterChange,
-  onExport
+  onExport,
+  collapsed,
+  onToggle
 }: Props) {
   const maxIndex = Math.max(analysis.spine.length - 1, 0);
 
@@ -45,140 +49,170 @@ export function VolumesPanel({
   };
 
   return (
-    <section className="panel splitPanel">
-      <div className="panelHeader">
-        <h3>
-          <Layers size={17} />
-          Volumes
-        </h3>
-        <button className="iconButton" onClick={onAddRange} title="Thêm khoảng">
-          <Plus size={17} />
-        </button>
-      </div>
-
-      {}
-      {analysis.coverPath && (
-        <div className="originalCoverBox">
-          <span className="boxLabel">Ảnh bìa gốc của sách</span>
-          <div className="boxContent">
-            <img
-              src={`/api/epubs/${encodeURIComponent(analysis.id)}/assets?path=${encodeURIComponent(analysis.coverPath)}`}
-              alt="Original Book Cover"
-              className="originalCoverPreview"
-            />
-            <div className="originalCoverMeta">
-              <strong>{metadataTitle(analysis)}</strong>
-              <p>{analysis.creator || "Unknown Creator"}</p>
-              <small>{analysis.spine.length} Spine Items</small>
-            </div>
+    <section className={`panel splitPanel ${collapsed ? "volumesPanelCollapsed" : ""}`}>
+      <div className="panelHeader" style={collapsed ? { padding: "10px 0", flexDirection: "column", gap: "12px", alignItems: "center" } : undefined}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexDirection: collapsed ? "column" : "row", width: collapsed ? "auto" : "100%", justifyContent: collapsed ? "center" : "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexDirection: collapsed ? "column" : "row" }}>
+            <button
+              className="sidebarToggle"
+              onClick={onToggle}
+              title={collapsed ? "Mở bảng Volumes" : "Thu gọn bảng Volumes"}
+              style={{ border: "1px solid #c9c6bd", borderRadius: "6px", width: "32px", height: "32px", display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#fffdf8", cursor: "pointer" }}
+            >
+              {collapsed ? <PanelRightOpen size={19} /> : <PanelRightClose size={19} />}
+            </button>
+            {!collapsed && (
+              <h3>
+                <Layers size={17} />
+                Volumes
+              </h3>
+            )}
           </div>
+          {!collapsed && (
+            <button className="iconButton" onClick={onAddRange} title="Thêm khoảng">
+              <Plus size={17} />
+            </button>
+          )}
         </div>
-      )}
-
-      <div className="detectBox">
-        <div>
-          <strong>Auto-detect</strong>
-          <p>{detectSummary(analysis.detectedVolumes.length)}</p>
-        </div>
-        <button className="smallButton" onClick={onApplyDetected} disabled={!analysis.detectedVolumes.length}>
-          Áp dụng
-        </button>
-      </div>
-
-      <label className="checkRow">
-        <input
-          type="checkbox"
-          checked={includeFrontmatter}
-          onChange={(event) => onIncludeFrontmatterChange(event.target.checked)}
-        />
-        <span>Thêm title/index đầu sách vào mỗi EPUB</span>
-      </label>
-
-      <div className="rangeHeader">
-        <span>Cover</span>
-        <span>Label</span>
-        <span>Start</span>
-        <span>End</span>
-      </div>
-      <div className="ranges">
-        {ranges.map((range, idx) => {
-          const coverSrc = range.coverImage
-            ? (range.coverImage.startsWith("data:") || range.coverImage.startsWith("http")
-                ? range.coverImage
-                : `/api/epubs/${encodeURIComponent(analysis.id)}/assets?path=${encodeURIComponent(range.coverImage)}`)
-            : (analysis.coverPath
-                ? `/api/epubs/${encodeURIComponent(analysis.id)}/assets?path=${encodeURIComponent(analysis.coverPath)}`
-                : "");
-
-          return (
-            <div className="rangeRow" key={`${idx}-${range.label}`}>
-              <button
-                type="button"
-                className={`rangeCoverBtn ${range.coverImage ? "hasCustomCover" : ""}`}
-                onClick={() => {
-                  setActiveRangeIdx(idx);
-                  setCoverModalOpen(true);
-                }}
-                title="Cấu hình ảnh bìa riêng cho Volume này"
-              >
-                {coverSrc ? (
-                  <img src={coverSrc} alt="Vol Cover" className="rangeCoverThumb" />
-                ) : (
-                  <ImageIcon size={14} className="defaultIcon" />
-                )}
-                {range.coverImage && <span className="customCoverIndicator" />}
-              </button>
-              <input value={range.label} onChange={(event) => onUpdateRange(idx, { label: event.target.value })} />
-              <NumberField value={range.startIndex} max={maxIndex} onChange={(value) => onUpdateRange(idx, { startIndex: value })} />
-              <NumberField value={range.endIndex} max={maxIndex} onChange={(value) => onUpdateRange(idx, { endIndex: value })} />
-              <button className="iconButton danger" onClick={() => onRemoveRange(idx)} title="Xóa khoảng">
-                <Trash2 size={16} />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-
-      <button className="primaryButton" onClick={onExport} disabled={busy || ranges.length === 0}>
-        <Scissors size={18} />
-        <span>Tách EPUB</span>
-      </button>
-
-      {exportProgress && (
-        <div className="progressWrapper">
-          <div className="progressText">
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, marginRight: "8px" }} title={`Đang xuất: ${exportProgress.label}`}>
-              Đang xuất: {exportProgress.label}
+        {collapsed && (
+          <div
+            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "12px", marginTop: "4px", color: "#687168" }}
+            title="Volumes"
+          >
+            <Layers size={17} />
+            <span style={{ writingMode: "vertical-rl", textOrientation: "mixed", fontSize: "11px", fontWeight: "700", letterSpacing: "1.5px", textTransform: "uppercase", opacity: 0.8 }}>
+              Volumes
             </span>
-            <span>{Math.round((exportProgress.index / exportProgress.total) * 100)}%</span>
           </div>
-          <div className="progressBarContainer">
-            <div className="progressBar" style={{ width: `${(exportProgress.index / exportProgress.total) * 100}%` }}></div>
+        )}
+      </div>
+
+      {!collapsed && (
+        <>
+          {analysis.coverPath && (
+            <div className="originalCoverBox">
+              <span className="boxLabel">Ảnh bìa gốc của sách</span>
+              <div className="boxContent">
+                <img
+                  src={`/api/epubs/${encodeURIComponent(analysis.id)}/assets?path=${encodeURIComponent(analysis.coverPath)}`}
+                  alt="Original Book Cover"
+                  className="originalCoverPreview"
+                />
+                <div className="originalCoverMeta">
+                  <strong>{metadataTitle(analysis)}</strong>
+                  <p>{analysis.creator || "Unknown Creator"}</p>
+                  <small>{analysis.spine.length} Spine Items</small>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="detectBox">
+            <div>
+              <strong>Auto-detect</strong>
+              <p>{detectSummary(analysis.detectedVolumes.length)}</p>
+            </div>
+            <button className="smallButton" onClick={onApplyDetected} disabled={!analysis.detectedVolumes.length}>
+              Áp dụng
+            </button>
           </div>
-        </div>
+
+          <label className="checkRow">
+            <input
+              type="checkbox"
+              checked={includeFrontmatter}
+              onChange={(event) => onIncludeFrontmatterChange(event.target.checked)}
+            />
+            <span>Thêm title/index đầu sách vào mỗi EPUB</span>
+          </label>
+
+          <div className="rangeHeader">
+            <span>Cover</span>
+            <span>Label</span>
+            <span>Start</span>
+            <span>End</span>
+          </div>
+          <div className="ranges">
+            {ranges.map((range, idx) => {
+              const coverSrc = range.coverImage
+                ? (range.coverImage.startsWith("data:") || range.coverImage.startsWith("http")
+                    ? range.coverImage
+                    : `/api/epubs/${encodeURIComponent(analysis.id)}/assets?path=${encodeURIComponent(range.coverImage)}`)
+                : (analysis.coverPath
+                    ? `/api/epubs/${encodeURIComponent(analysis.id)}/assets?path=${encodeURIComponent(analysis.coverPath)}`
+                    : "");
+
+              return (
+                <div className="rangeRow" key={`${idx}-${range.label}`}>
+                  <button
+                    type="button"
+                    className={`rangeCoverBtn ${range.coverImage ? "hasCustomCover" : ""}`}
+                    onClick={() => {
+                      setActiveRangeIdx(idx);
+                      setCoverModalOpen(true);
+                    }}
+                    title="Cấu hình ảnh bìa riêng cho Volume này"
+                  >
+                    {coverSrc ? (
+                      <img src={coverSrc} alt="Vol Cover" className="rangeCoverThumb" />
+                    ) : (
+                      <ImageIcon size={14} className="defaultIcon" />
+                    )}
+                    {range.coverImage && <span className="customCoverIndicator" />}
+                  </button>
+                  <input value={range.label} onChange={(event) => onUpdateRange(idx, { label: event.target.value })} />
+                  <NumberField value={range.startIndex} max={maxIndex} onChange={(value) => onUpdateRange(idx, { startIndex: value })} />
+                  <NumberField value={range.endIndex} max={maxIndex} onChange={(value) => onUpdateRange(idx, { endIndex: value })} />
+                  <button className="iconButton danger" onClick={() => onRemoveRange(idx)} title="Xóa khoảng">
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          <button className="primaryButton" onClick={onExport} disabled={busy || ranges.length === 0}>
+            <Scissors size={18} />
+            <span>Tách EPUB</span>
+          </button>
+
+          {exportProgress && (
+            <div className="progressWrapper">
+              <div className="progressText">
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, marginRight: "8px" }} title={`Đang xuất: ${exportProgress.label}`}>
+                  Đang xuất: {exportProgress.label}
+                </span>
+                <span>{Math.round((exportProgress.index / exportProgress.total) * 100)}%</span>
+              </div>
+              <div className="progressBarContainer">
+                <div className="progressBar" style={{ width: `${(exportProgress.index / exportProgress.total) * 100}%` }}></div>
+              </div>
+            </div>
+          )}
+
+          {exports.length ? (
+            <div className="exports">
+              {exports.map((file) => (
+                <a key={file.path} href={file.url}>
+                  <Download size={16} />
+                  <span>{file.name}</span>
+                  <small>{formatBytes(file.size)}</small>
+                </a>
+              ))}
+            </div>
+          ) : null}
+
+          <CoverModal
+            open={coverModalOpen}
+            analysis={analysis}
+            rangeIndex={activeRangeIdx}
+            range={activeRange}
+            includeFrontmatter={includeFrontmatter}
+            onSaveCover={handleSaveCover}
+            onClose={() => setCoverModalOpen(false)}
+          />
+        </>
       )}
-
-      {exports.length ? (
-        <div className="exports">
-          {exports.map((file) => (
-            <a key={file.path} href={file.url}>
-              <Download size={16} />
-              <span>{file.name}</span>
-              <small>{formatBytes(file.size)}</small>
-            </a>
-          ))}
-        </div>
-      ) : null}
-
-      <CoverModal
-        open={coverModalOpen}
-        analysis={analysis}
-        rangeIndex={activeRangeIdx}
-        range={activeRange}
-        includeFrontmatter={includeFrontmatter}
-        onSaveCover={handleSaveCover}
-        onClose={() => setCoverModalOpen(false)}
-      />
     </section>
   );
 }

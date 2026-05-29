@@ -377,7 +377,31 @@ button {
   height: calc(100dvh - 104px);
   min-height: 0;
   min-width: 0;
+  transition: grid-template-columns 160ms ease;
 }
+
+.grid.volumesCollapsed {
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) 64px;
+}
+
+.volumesPanelCollapsed {
+  align-items: center;
+  padding: 10px 0;
+  background: #fbf9f3;
+}
+
+@media (max-width: 1180px) {
+  .splitPanel.volumesPanelCollapsed {
+    min-height: 64px !important;
+  }
+}
+
+@media (max-width: 860px) {
+  .splitPanel.volumesPanelCollapsed {
+    min-height: 64px !important;
+  }
+}
+
 
 .panel {
   min-height: 0;
