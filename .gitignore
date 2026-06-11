@@ -6,6 +6,7 @@ dist/
 output/
 scratch/
 edit/
+.claude/
 *.exe
 *.exe~
 *.log

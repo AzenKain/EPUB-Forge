@@ -1,13 +1,15 @@
-# Prebuild Version 2.4
+# Prebuild Version 2.4.1
 
 ## Thay đổi chính
 
-- **Thêm phương thức GetFast và PostFast cho Extensions**:
-  - Hỗ trợ gửi Raw HTTP Request siêu nhanh qua Go Client (tốc độ cào tải tăng gấp 10-30 lần do không tốn tài nguyên dựng giao diện Chrome).
-  - Tự động đồng bộ Cookie hai chiều: Chuyển giao cookie mượt mà giữa Go Client Jar và Chrome Headless Rod Page để giữ trạng thái đăng nhập đồng nhất.
-  - Tự động giải quyết lỗi chứng chỉ TLS và SNI hostname không khớp (hỗ trợ tự động chuyển ServerName, đặc biệt hữu dụng cho host ảnh như `img.jukaza.site`).
-- **Cơ chế Fallback thông minh khi gặp Cloudflare/Turnstile**:
-  - Nếu `GetFast` / `PostFast` gặp lỗi kết nối hoặc bị chặn bởi Cloudflare, hệ thống sẽ tự động chuyển hướng request sang chế độ duyệt trình duyệt ảo Rod (Stealth Mode) để giải quyết challenge tự động, đảm bảo việc cào truyện luôn hoạt động mượt mà.
+- **Sửa lỗi Download Range (Tải từ A -> B)**:
+  - Khắc phục hoàn toàn lỗi chỉ tải được chương 1 hoặc tải sai range khi người dùng chọn tải một khoảng chương nhất định.
+  - Tối ưu hóa logic xử lý liên kết chuỗi chương, đảm bảo tải được chính xác toàn bộ nội dung từ chương bắt đầu đến chương kết thúc theo đúng yêu cầu.
+
+- **Cải thiện tính ổn định của Tải Truyện**:
+  - Tăng cường khả năng chống nhiễu và lọc rác trong quá trình trích xuất dữ liệu từ trang web.
+  - Tối ưu hóa xử lý lỗi kết nối và định dạng dữ liệu, giúp việc tải truyện diễn ra mượt mà và chính xác hơn.
+
 ## Ghi chú
 
 Tải đúng file theo hệ điều hành và kiến trúc máy của bạn trong phần Assets.

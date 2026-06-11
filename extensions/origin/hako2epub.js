@@ -913,7 +913,12 @@ function run(params) {
     const cleanedText = htmlToText(content);
     const hasValidImages = /<img\b/i.test(content);
     if (!content || (!hasValidImages && cleanedText.length < 10)) {
-      throw new Error("Không tìm thấy nội dung chương hoặc nội dung bị khóa: " + pageTitle);
+      const isIllustration = /minh\s*hoạ|minh\s*họa|illustration/i.test(pageTitle);
+      if (isIllustration) {
+        content = "<p>[Ảnh minh hoạ không tải được hoặc đã bị xoá khỏi nguồn]</p>";
+      } else {
+        throw new Error("Không tìm thấy nội dung chương hoặc nội dung bị khóa: " + pageTitle);
+      }
     }
 
     resultChapters.push({
