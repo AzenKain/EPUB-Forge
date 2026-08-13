@@ -1383,15 +1383,15 @@ func appendChoiceOption(options []extensionChoiceOption, index int, item any) []
 	}
 }
 
-func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string]any, logWriter io.Writer) ([]string, error) {
+func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string]any, logWriter io.Writer) ([]string, []string, error) {
 	filePath := s.extensionFilePath(id)
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("extension %q not found", id)
+		return nil, nil, fmt.Errorf("extension %q not found", id)
 	}
 
 	jsBytes, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	runID := "run_" + randomID()
@@ -1474,13 +1474,13 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 
 	_, err = vm.RunString(string(jsBytes))
 	if err != nil {
-		return nil, fmt.Errorf("lỗi khởi tạo script: %w", err)
+		return nil, nil, fmt.Errorf("lỗi khởi tạo script: %w", err)
 	}
 
 	var runFunc func(map[string]any) any
 	err = vm.ExportTo(vm.Get("run"), &runFunc)
 	if err != nil {
-		return nil, errors.New("missing run(params) function in script")
+		return nil, nil, errors.New("missing run(params) function in script")
 	}
 
 	fmt.Fprintf(logWriter, "[*] Đang thực thi mã nguồn Extension...\n")
@@ -1513,16 +1513,31 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				fmt.Fprintf(logWriter, "[-] Đã huỷ thực thi theo yêu cầu của người dùng.\n")
-				return nil, err
+				return nil, nil, err
 			}
-			return nil, err
+			return nil, nil, err
 		}
 	case <-runCtx.Done():
-		return nil, context.Canceled
+		return nil, nil, context.Canceled
 	}
 
 	if result == nil {
-		return nil, errors.New("kết quả trả về từ extension rỗng (null/undefined)")
+		return nil, nil, errors.New("kết quả trả về từ extension rỗng (null/undefined)")
+	}
+
+	var warnings []string
+	if mapRes, ok := result.(map[string]any); ok {
+		if warningsVal, ok := mapRes["warnings"]; ok {
+			if sliceVal, ok := warningsVal.([]any); ok {
+				for _, item := range sliceVal {
+					if ws, ok := item.(string); ok {
+						warnings = append(warnings, ws)
+					}
+				}
+			} else if sliceVal, ok := warningsVal.([]string); ok {
+				warnings = append(warnings, sliceVal...)
+			}
+		}
 	}
 
 	fmt.Fprintf(logWriter, "[*] Đang đóng gói dữ liệu thành tệp tin EPUB...\n")
@@ -1555,19 +1570,19 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 	}
 
 	if len(ebooks) == 0 {
-		return nil, errors.New("dữ liệu trả về không hợp lệ, không tìm thấy thông tin sách")
+		return nil, nil, errors.New("dữ liệu trả về không hợp lệ, không tìm thấy thông tin sách")
 	}
 
 	var createdBooks []string
 	for _, m := range ebooks {
 		jsonBytes, err := json.Marshal(m)
 		if err != nil {
-			return nil, fmt.Errorf("lỗi đóng gói kết quả: %w", err)
+			return nil, nil, fmt.Errorf("lỗi đóng gói kết quả: %w", err)
 		}
 
 		var req models.CreateEpubRequest
 		if err := json.Unmarshal(jsonBytes, &req); err != nil {
-			return nil, fmt.Errorf("dữ liệu trả về không khớp cấu trúc EPUB: %w", err)
+			return nil, nil, fmt.Errorf("dữ liệu trả về không khớp cấu trúc EPUB: %w", err)
 		}
 
 		assetsMap := make(map[string]string)
@@ -1582,7 +1597,7 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 
 		outputName, err := s.CreateEpub(req, nil)
 		if err != nil {
-			return nil, fmt.Errorf("lỗi biên dịch EPUB: %w", err)
+			return nil, nil, fmt.Errorf("lỗi biên dịch EPUB: %w", err)
 		}
 		fmt.Fprintf(logWriter, "[*] Đã tự kiểm tra và sửa EPUB trước khi lưu: %s\n", outputName)
 		createdBooks = append(createdBooks, outputName)
@@ -1590,7 +1605,7 @@ func (s *Service) RunExtension(ctx context.Context, id string, inputs map[string
 
 	outputNamesStr := strings.Join(createdBooks, ", ")
 	fmt.Fprintf(logWriter, "[+] Đã tạo sách thành công: %s\n", outputNamesStr)
-	return createdBooks, nil
+	return createdBooks, warnings, nil
 }
 
 func (s *Service) AddExtension(jsCode []byte) (ExtensionInfo, error) {

@@ -635,11 +635,16 @@ function mimeFromExt(ext) {
 function fetchWithRetry(session, url, headers, maxAttempts) {
   if (!maxAttempts) maxAttempts = 8;
   let attempt = 0;
+  let is403 = false;
   while (attempt < maxAttempts) {
     let resp = null;
     try {
       resp = session.Get(url, headers || {});
       if (resp && resp.Status >= 200 && resp.Status < 300) return resp;
+      if (resp && resp.Status === 403) {
+        is403 = true;
+        maxAttempts = 2;
+      }
       console.log("  [*] HTTP " + (resp ? resp.Status : "khong phan hoi") + " khi tai: " + url);
       if (resp && resp.Status === 404) break;
     } catch (e) {
@@ -652,6 +657,9 @@ function fetchWithRetry(session, url, headers, maxAttempts) {
       console.log("  [*] Thu lai sau " + Math.round(delay / 1000) + "s (" + (attempt + 1) + "/" + maxAttempts + ")...");
       utils.sleep(delay);
     }
+  }
+  if (is403) {
+    return { Status: 403, Body: "" };
   }
   throw new Error("Khong the tai URL sau nhieu lan thu: " + url);
 }
@@ -892,7 +900,7 @@ function lockedChapterPlaceholder(chapterTitle, chapterURL) {
     '<p><a href="' + chapterURL + '">Mo tren Valvrareteam</a></p>';
 }
 
-function buildVolumeEbook(session, volume, seriesInfo, storyUrl, auth) {
+function buildVolumeEbook(session, volume, seriesInfo, storyUrl, auth, failedChapters) {
   const volumeTitle = volume.title || ("Tap " + volume.index);
   const volumeCoverURL = volume.coverURL || seriesInfo.coverURL;
   const coverImage = downloadCoverImage(session, volumeCoverURL, storyUrl);
@@ -908,6 +916,11 @@ function buildVolumeEbook(session, volume, seriesInfo, storyUrl, auth) {
     console.log("  -> [" + (i + 1) + "/" + volume.chapters.length + "] " + chap.title);
 
     const chapResp = fetchWithRetry(session, chap.url, { "Referer": storyUrl }, 8);
+    if (chapResp && chapResp.Status === 403) {
+      console.log("  [!] Bỏ qua chương do lỗi 403 (không thể truy cập nội dung): " + chap.title);
+      failedChapters.push(chap.title);
+      continue;
+    }
     let pageTitle = extractChapterTitle(chapResp.Body, chap.title);
     let content = extractChapterContent(chapResp.Body);
 
@@ -982,6 +995,7 @@ function buildVolumeEbook(session, volume, seriesInfo, storyUrl, auth) {
 }
 
 function run(params) {
+  const failedChapters = [];
   const session = http.newSession();
   const storyUrl = storyURLFromInput(params.url);
   const baseUrl = valvrareOriginFromURL(storyUrl);
@@ -990,6 +1004,9 @@ function run(params) {
   console.log("[*] Dang tai trang truyen: " + storyUrl);
 
   const seriesResp = fetchWithRetry(session, storyUrl, {}, 8);
+  if (seriesResp && seriesResp.Status === 403) {
+    throw new Error("Không thể tải trang truyện do lỗi 403.");
+  }
   const auth = loginValvrare(session, params, storyUrl);
   const seriesInfo = extractSeriesInfo(seriesResp.Body, storyUrl);
   console.log("[*] Ten truyen: " + seriesInfo.title);
@@ -1038,9 +1055,9 @@ function run(params) {
 
   const ebooks = [];
   for (let i = 0; i < volumes.length; i++) {
-    ebooks.push(buildVolumeEbook(session, volumes[i], seriesInfo, storyUrl, auth));
+    ebooks.push(buildVolumeEbook(session, volumes[i], seriesInfo, storyUrl, auth, failedChapters));
   }
 
   console.log("[+] Da tao du lieu " + ebooks.length + " EPUB rieng cho Valvrareteam.");
-  return { ebooks: ebooks };
+  return { ebooks: ebooks, warnings: failedChapters };
 }

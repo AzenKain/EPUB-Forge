@@ -19,7 +19,7 @@ import (
 //go:embed all:dist
 var embeddedDist embed.FS
 
-var Version = "2.4.1"
+var Version = "2.4.2"
 
 func main() {
 	workspace, err := os.Getwd()
@@ -32,7 +32,6 @@ func main() {
 	}
 	defer svc.Close()
 
-	// Clean up any left-over .old files from a previous self-update
 	go func() {
 		time.Sleep(2 * time.Second)
 		self, err := os.Executable()
@@ -75,7 +74,6 @@ func main() {
 		Handler: router.New(svc, embeddedDist),
 	}
 
-	// Graceful shutdown on Ctrl+C / SIGTERM
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 

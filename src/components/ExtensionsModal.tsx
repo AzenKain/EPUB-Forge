@@ -32,6 +32,7 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [warnings, setWarnings] = useState<string[]>([]);
 
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [showCaptchaPanel, setShowCaptchaPanel] = useState(false);
@@ -477,6 +478,7 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
     setRunning(true);
     setError("");
     setSuccess("");
+    setWarnings([]);
     setLogs(["[*] Khởi động tiến trình..."]);
     setActiveRunId(null);
     setShowCaptchaPanel(false);
@@ -542,6 +544,9 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
             } else if (data.type === "done") {
               const fileNames = data.fileNames || (data.fileName ? [data.fileName] : []);
               setSuccess(`Hoàn tất! Đã tạo sách thành công: ${fileNames.join(", ")}`);
+              if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+                setWarnings(data.warnings);
+              }
               setRunning(false);
               setShowCaptchaPanel(false);
               setCaptchaScreenshot("");
@@ -1076,6 +1081,7 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
           .consoleLine.error { color: #f48c8c; }
           .consoleLine.success { color: #8cf4a8; }
           .consoleLine.info { color: #8cd2f4; }
+          .consoleLine.warning { color: #f4d18c; }
 
           .choicePanel {
             border: 1px solid #d7d2c5;
@@ -1284,6 +1290,13 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
             border: 1px solid #94bfa7;
             background: #eef8f2;
             color: #1f624d;
+          }
+
+          .extensionsModal .toastMessage.warning {
+            margin-bottom: 0;
+            border: 1px solid #e2c070;
+            background: #fff9e6;
+            color: #8a6d1c;
           }
 
           @keyframes spin {
@@ -1653,6 +1666,7 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
                         if (log.startsWith("[-]")) cls += " error";
                         else if (log.startsWith("[+]")) cls += " success";
                         else if (log.startsWith("[*]")) cls += " info";
+                        else if (log.startsWith("[!]")) cls += " warning";
                         return (
                           <div key={index} className={cls}>
                             {log}
@@ -1734,9 +1748,19 @@ export function ExtensionsModal({ open, onClose, onRunSuccess }: Props) {
             </div>
           )}
           {success && (
-            <div className="toastMessage success" style={{ flex: 1, margin: 0 }}>
-              <Check size={14} />
-              <span>{success}</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px", flex: 1 }}>
+              <div className="toastMessage success" style={{ margin: 0 }}>
+                <Check size={14} />
+                <span>{success}</span>
+              </div>
+              {warnings && warnings.length > 0 && (
+                <div className="toastMessage warning" style={{ margin: 0 }}>
+                  <AlertCircle size={14} />
+                  <span>
+                    Cảnh báo: Có {warnings.length} chương không thể tải (HTTP 403): {warnings.join(", ")}
+                  </span>
+                </div>
+              )}
             </div>
           )}
           

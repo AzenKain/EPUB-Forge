@@ -614,7 +614,7 @@ func (c *Controller) RunExtension(w http.ResponseWriter, r *http.Request) {
 	flusher, _ := w.(http.Flusher)
 	logWriter := &responseLogWriter{w: w, flusher: flusher}
 
-	fileNames, err := c.service.RunExtension(r.Context(), id, inputs, logWriter)
+	fileNames, warnings, err := c.service.RunExtension(r.Context(), id, inputs, logWriter)
 	if err != nil {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"type":  "error",
@@ -627,6 +627,7 @@ func (c *Controller) RunExtension(w http.ResponseWriter, r *http.Request) {
 		"type":      "done",
 		"fileNames": fileNames,
 		"fileName":  strings.Join(fileNames, ", "),
+		"warnings":  warnings,
 	})
 }
 

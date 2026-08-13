@@ -742,6 +742,7 @@ function waitAfterHakoResponse(resp, fallbackMs) {
 }
 
 function run(params) {
+  const failedChapters = [];
   const baseUrl = hakoOriginFromURL(params.url);
   const session = http.newSession();
   let storyUrl = absolutize(normalizeHakoInputURL(params.url), baseUrl);
@@ -820,7 +821,8 @@ function run(params) {
   function downloadAndProcessChapter(session, chap, volumeIndex, resultChapters, resultImages, state, storyUrl) {
     let chapResp = null;
     let attempt = 0;
-    const maxAttempts = 5;
+    let maxAttempts = 5;
+    let is403 = false;
 
     while (attempt < maxAttempts) {
       try {
@@ -830,6 +832,10 @@ function run(params) {
             throw new Error("Phiên đăng nhập hết hạn khi tải chương.");
           }
           break;
+        }
+        if (chapResp && chapResp.Status === 403) {
+          is403 = true;
+          maxAttempts = 2;
         }
         console.log("  [!] Tải chương thất bại (HTTP " + (chapResp ? chapResp.Status : "không có phản hồi") + ").");
       } catch (e) {
@@ -846,6 +852,11 @@ function run(params) {
     }
 
     if (!chapResp || chapResp.Status !== 200) {
+      if (is403) {
+        console.log("  [!] Bỏ qua chương do lỗi 403 (không thể truy cập nội dung): " + chap.title);
+        failedChapters.push(chap.title);
+        return;
+      }
       throw new Error("Không thể tải chương: " + chap.title + " sau " + maxAttempts + " lần thử.");
     }
 
@@ -1046,7 +1057,7 @@ function run(params) {
     for (let v = 0; v < selectedVolumes.length; v++) {
       ebooks.push(buildVolumeEbook(selectedVolumes[v]));
     }
-    return { ebooks: ebooks };
+    return { ebooks: ebooks, warnings: failedChapters };
   }
 
   let chapters = collectChaptersFromHTML(seriesResp.Body, storyUrl);
@@ -1114,6 +1125,7 @@ function run(params) {
       coverImage: coverImage
     },
     chapters: resultChapters,
-    images: resultImages
+    images: resultImages,
+    warnings: failedChapters
   };
 }

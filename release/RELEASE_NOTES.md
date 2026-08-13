@@ -1,14 +1,17 @@
-# Prebuild Version 2.4.1
+# Prebuild Version 2.4.2
 
 ## Thay đổi chính
 
-- **Sửa lỗi Download Range (Tải từ A -> B)**:
-  - Khắc phục hoàn toàn lỗi chỉ tải được chương 1 hoặc tải sai range khi người dùng chọn tải một khoảng chương nhất định.
-  - Tối ưu hóa logic xử lý liên kết chuỗi chương, đảm bảo tải được chính xác toàn bộ nội dung từ chương bắt đầu đến chương kết thúc theo đúng yêu cầu.
+- **Tự động bỏ qua chương lỗi 403 (Skip 403 HTTP errors)**:
+  - Các extension cào truyện chính thức (`Hako`, `Valvrareteam` và `Jukaza`) sẽ tự động phát hiện và bỏ qua các chương bị lỗi 403 Forbidden (nội dung bị ẩn, khóa hoặc không có quyền truy cập công khai) sau 2 lần thử lại.
+  - Ngăn chặn việc dừng tiến trình đột ngột hoặc làm hỏng toàn bộ tệp EPUB được đóng gói khi gặp một vài chương lỗi.
 
-- **Cải thiện tính ổn định của Tải Truyện**:
-  - Tăng cường khả năng chống nhiễu và lọc rác trong quá trình trích xuất dữ liệu từ trang web.
-  - Tối ưu hóa xử lý lỗi kết nối và định dạng dữ liệu, giúp việc tải truyện diễn ra mượt mà và chính xác hơn.
+- **Hệ thống hiển thị cảnh báo (Warnings UI)**:
+  - Tổng hợp danh sách các chương không thể tải và hiển thị thông báo cảnh báo trực quan (màu vàng) trên giao diện Extension Modal khi hoàn tất.
+  - Hỗ trợ định dạng và hiển thị màu vàng nổi bật cho các dòng nhật ký cảnh báo bắt đầu bằng ký tự `[!]` trong bảng Console Log.
+
+- **Cập nhật tài liệu Extension Developer Guide**:
+  - Bổ sung tài liệu mô tả trường `warnings` (`string[]`) trong giá trị trả về của hàm `run()` tại `EXTENSION_GUIDE.md` để các nhà phát triển có thể tự định nghĩa cảnh báo bỏ qua chương lỗi.
 
 ## Ghi chú
 

@@ -95,6 +95,7 @@ function extractLoginError(html) {
 }
 
 function run(params) {
+  const failedChapters = [];
   const baseUrl = "https://sangtacviet.online";
   const session = http.newSession();
 
@@ -108,6 +109,7 @@ function run(params) {
     let attempt = 0;
     let resp = null;
     let readerDataMatch = null;
+    let is403 = false;
     while (attempt < maxAttempts) {
       try {
         resp = session.Get(url, {});
@@ -122,6 +124,10 @@ function run(params) {
           }
           console.log("  [*] Trang tải thành công nhưng thiếu dữ liệu giải mã (có thể bị rate limit / Cloudflare).");
         } else {
+          if (resp && resp.Status === 403) {
+            is403 = true;
+            maxAttempts = 2;
+          }
           console.log("  [*] Lỗi tải trang chương. Status: " + (resp ? resp.Status : "không phản hồi"));
         }
       } catch (err) {
@@ -136,6 +142,9 @@ function run(params) {
         utils.sleep(sleepMs);
       }
     }
+    if (is403) {
+      return { is403: true };
+    }
     return null;
   }
 
@@ -143,11 +152,16 @@ function run(params) {
     if (!maxAttempts) maxAttempts = 10;
     let attempt = 0;
     let resp = null;
+    let is403 = false;
     while (attempt < maxAttempts) {
       try {
         resp = session.Get(url, headers || {});
         if (resp && resp.Status === 200) {
           return resp;
+        }
+        if (resp && resp.Status === 403) {
+          is403 = true;
+          maxAttempts = 2;
         }
         console.log("  [*] Lỗi API. Status: " + (resp ? resp.Status : "không phản hồi"));
       } catch (err) {
@@ -161,6 +175,9 @@ function run(params) {
         console.log("  [*] Thử lại API sau " + (sleepMs / 1000) + " giây (lượt " + (attempt + 1) + "/" + maxAttempts + ")...");
         utils.sleep(sleepMs);
       }
+    }
+    if (is403) {
+      return { Status: 403, Body: "" };
     }
     return null;
   }
@@ -347,6 +364,11 @@ function run(params) {
     if (!pageResult) {
       throw new Error("Không thể tải trang chương sau nhiều lần thử lại: " + chap.title);
     }
+    if (pageResult.is403) {
+      console.log("  [!] Bỏ qua chương do lỗi 403 (không thể truy cập nội dung): " + chap.title);
+      failedChapters.push(chap.title);
+      continue;
+    }
     
     const chapPageResp = pageResult.resp;
     const readerDataMatch = pageResult.readerDataMatch;
@@ -384,6 +406,11 @@ function run(params) {
     
     if (!apiResp) {
       throw new Error("Không thể gọi API giải mã sau nhiều lần thử lại ở chương: " + chap.title);
+    }
+    if (apiResp.Status === 403) {
+      console.log("  [!] Bỏ qua chương do lỗi 403 (không thể gọi API): " + chap.title);
+      failedChapters.push(chap.title);
+      continue;
     }
     
     let apiData;
@@ -521,6 +548,7 @@ function run(params) {
       coverImage: coverImageBase64
     },
     chapters: resultChapters,
-    images: resultImages
+    images: resultImages,
+    warnings: failedChapters
   };
 }

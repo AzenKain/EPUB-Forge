@@ -969,6 +969,10 @@ run(params) trả về
 | `chapters[].imageFileNames` | Chapter | `string[]` | ❌ | File ảnh cho chương manga |
 | `images` | Root | `object` | ❌ | Map path→Base64 ảnh nhúng |
 | `ebooks` | Root | `array` | ❌ | Mảng ebook (Format C) |
+| `warnings` | Root | `string[]` | ❌ | Mảng các cảnh báo (hiển thị Toast warning màu vàng trên UI khi hoàn tất) |
+
+> [!TIP]
+> **Sử dụng trường `warnings`**: Thích hợp để lưu lại danh sách các chương bị lỗi (ví dụ lỗi HTTP 403, 404) được bỏ qua trong quá trình cào. Điều này cho phép extension hoàn thành luồng và đóng gói EPUB bình thường, nhưng vẫn hiển thị thông báo rõ ràng cho người dùng ở cuối tiến trình.
 
 ---
 
