@@ -1079,12 +1079,20 @@ func (s *Service) FetchStoreExtensions() ([]StoreExtensionInfo, error) {
 	storeCacheMu.Unlock()
 
 	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest("GET", storeAPIURL, nil)
+	storeURL := storeAPIURL
+	if strings.Contains(storeURL, "?") {
+		storeURL += fmt.Sprintf("&_t=%d", time.Now().UnixNano())
+	} else {
+		storeURL += fmt.Sprintf("?_t=%d", time.Now().UnixNano())
+	}
+	req, err := http.NewRequest("GET", storeURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("không thể tạo request tới GitHub: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "EPUBForge-ExtensionStore")
+	req.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	req.Header.Set("Pragma", "no-cache")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1181,11 +1189,19 @@ func (s *Service) tagStoreWithLocalState(items []StoreExtensionInfo) []StoreExte
 
 func (s *Service) downloadRawFile(rawURL string) ([]byte, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest("GET", rawURL, nil)
+	targetURL := rawURL
+	if strings.Contains(targetURL, "?") {
+		targetURL += fmt.Sprintf("&_t=%d", time.Now().UnixNano())
+	} else {
+		targetURL += fmt.Sprintf("?_t=%d", time.Now().UnixNano())
+	}
+	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "EPUBForge-ExtensionStore")
+	req.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	req.Header.Set("Pragma", "no-cache")
 
 	resp, err := client.Do(req)
 	if err != nil {
