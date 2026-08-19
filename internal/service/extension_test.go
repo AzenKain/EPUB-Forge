@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -88,4 +89,40 @@ func TestExtensionChoiceFlow(t *testing.T) {
 		t.Fatal("timed out waiting for selected choice")
 	}
 }
+
+func TestValvrareteamExtension(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network extension test in short mode")
+	}
+	svc, err := New(t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("failed to init service: %v", err)
+	}
+	defer svc.Close()
+
+	params := map[string]any{
+		"url":             "https://valvrareteam.net/truyen/lam-lai-cuoc-doi-sau-khi-bi-cam-sung-va-vu-oan-toi-tro-nen-than-thiet-voi-nu-than-xinh-dep-nhat-truong-2f48bf12",
+		"username":        os.Getenv("VALVRARE_USERNAME"),
+		"password":        os.Getenv("VALVRARE_PASSWORD"),
+		"downloadMode":    "chapter_range",
+		"startChapterUrl": "https://valvrareteam.net/truyen/lam-lai-cuoc-doi-sau-khi-bi-cam-sung-va-vu-oan-toi-tro-nen-than-thiet-voi-nu-than-xinh-dep-nhat-truong-2f48bf12/chuong/minh-hoa-2f48c0b7",
+		"endChapterUrl":   "https://valvrareteam.net/truyen/lam-lai-cuoc-doi-sau-khi-bi-cam-sung-va-vu-oan-toi-tro-nen-than-thiet-voi-nu-than-xinh-dep-nhat-truong-2f48bf12/chuong/chuong-1-bat-qua-tang-ngoai-tinh-va-bi-bat-nat-2f48c23c",
+	}
+
+	var logs bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	createdFiles, warnings, err := svc.RunExtension(ctx, "valvrareteam2epub", params, &logs)
+	if err != nil {
+		t.Fatalf("RunExtension failed: %v\nLogs:\n%s", err, logs.String())
+	}
+
+	if len(createdFiles) == 0 {
+		t.Fatalf("expected at least 1 created epub file, got 0\nLogs:\n%s", logs.String())
+	}
+
+	t.Logf("Created %d EPUB file(s): %v, warnings: %v", len(createdFiles), createdFiles, warnings)
+}
+
 

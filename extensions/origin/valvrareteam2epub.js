@@ -83,6 +83,22 @@ function htmlToText(html) {
     .trim();
 }
 
+const HTML_ENTITIES = {
+  nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'",
+  agrave: "à", aacute: "á", acirc: "â", atilde: "ã", adia: "ä", aring: "å",
+  Agrave: "À", Aacute: "Á", Acirc: "Â", Atilde: "Ã",
+  egrave: "è", eacute: "é", ecirc: "ê", edia: "ë",
+  Egrave: "È", Eacute: "É", Ecirc: "Ê",
+  igrave: "ì", iacute: "í", icirc: "î",
+  Igrave: "Ì", Iacute: "Í", Icirc: "Î",
+  ograve: "ò", oacute: "ó", ocirc: "ô", otilde: "õ",
+  Ograve: "Ò", Oacute: "Ó", Ocirc: "Ô",
+  ugrave: "ù", uacute: "ú", ucirc: "û",
+  Ugrave: "Ù", Uacute: "Ú", Ucirc: "Û",
+  yacute: "ỳ", yacute: "ý",
+  Ygrave: "Ỳ", Yacute: "Ý"
+};
+
 function decodeEntities(text) {
   return String(text || "")
     .replace(/&nbsp;/g, " ")
@@ -93,7 +109,8 @@ function decodeEntities(text) {
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")
     .replace(/&#(\d+);/g, function(_, n) { return String.fromCharCode(parseInt(n, 10)); })
-    .replace(/&#x([0-9a-f]+);/gi, function(_, n) { return String.fromCharCode(parseInt(n, 16)); });
+    .replace(/&#x([0-9a-f]+);/gi, function(_, n) { return String.fromCharCode(parseInt(n, 16)); })
+    .replace(/&([a-zA-Z0-9]+);/g, function(match, name) { return HTML_ENTITIES[name] || match; });
 }
 
 function stripWWW(host) {
@@ -231,19 +248,6 @@ function findBookJSONLD(html) {
   return null;
 }
 
-function decodeNextFlightEscapes(html) {
-  return String(html || "")
-    .replace(/\\u003c/g, "<")
-    .replace(/\\u003e/g, ">")
-    .replace(/\\u0026/g, "&")
-    .replace(/\\u0022/g, '"')
-    .replace(/\\u0027/g, "'")
-    .replace(/\\"/g, '"')
-    .replace(/\\n/g, "\n")
-    .replace(/\\r/g, "\r")
-    .replace(/\\t/g, "\t");
-}
-
 function extractBalanced(source, startIndex, openChar, closeChar) {
   const text = String(source || "");
   let start = text.indexOf(openChar, startIndex);
@@ -279,20 +283,63 @@ function extractBalanced(source, startIndex, openChar, closeChar) {
   return "";
 }
 
-function extractModulesFromHTML(html) {
-  const decoded = decodeNextFlightEscapes(html);
-  const markerIndex = decoded.indexOf('"modules":');
-  if (markerIndex < 0) return [];
-
-  const raw = extractBalanced(decoded, markerIndex, "[", "]");
-  if (!raw) return [];
-  try {
-    const modules = JSON.parse(raw);
-    return Array.isArray(modules) ? modules : [];
-  } catch (e) {
-    console.log("[-] Khong parse duoc module JSON cua Valvrareteam: " + e.message);
-    return [];
+function getNextFlightStream(html) {
+  let stream = "";
+  const scriptRe = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+  let match;
+  while ((match = scriptRe.exec(String(html || ""))) !== null) {
+    const scriptContent = match[1];
+    const pushRe = /(?:self\.__next_f|\b__next_f)\.push\s*\(/g;
+    let pushMatch;
+    while ((pushMatch = pushRe.exec(scriptContent)) !== null) {
+      const arrayText = extractBalanced(scriptContent, pushMatch.index, "[", "]");
+      if (!arrayText) continue;
+      try {
+        const arr = JSON.parse(arrayText);
+        if (Array.isArray(arr) && arr.length >= 2 && typeof arr[1] === "string") {
+          stream += arr[1];
+        }
+      } catch (e) {
+        const strMatch = arrayText.match(/^\s*\[\s*\d+\s*,\s*("[\s\S]*")\s*\]\s*$/);
+        if (strMatch) {
+          try {
+            stream += JSON.parse(strMatch[1]);
+          } catch (e2) {}
+        }
+      }
+    }
   }
+  return stream;
+}
+
+function extractModulesFromHTML(html) {
+  const flightStream = getNextFlightStream(html);
+  if (flightStream) {
+    const markerIndex = flightStream.indexOf('"modules":');
+    if (markerIndex >= 0) {
+      const raw = extractBalanced(flightStream, markerIndex, "[", "]");
+      if (raw) {
+        try {
+          const modules = JSON.parse(raw);
+          if (Array.isArray(modules) && modules.length > 0) return modules;
+        } catch (e) {
+          console.log("[-] Khong parse duoc module JSON tu Flight stream: " + e.message);
+        }
+      }
+    }
+  }
+
+  const nextDataMatch = String(html || "").match(/<script\b[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (nextDataMatch) {
+    try {
+      const nextData = JSON.parse(nextDataMatch[1]);
+      const pageProps = (nextData && nextData.props && nextData.props.pageProps) || {};
+      if (Array.isArray(pageProps.modules)) return pageProps.modules;
+      if (pageProps.novel && Array.isArray(pageProps.novel.modules)) return pageProps.novel.modules;
+    } catch (e) {}
+  }
+
+  return [];
 }
 
 function removeVietnameseMarks(text) {
@@ -812,8 +859,24 @@ function extractChapterTitle(html, fallbackTitle) {
   let title = htmlToText(firstMatch(html, /<h2\b[^>]*class=["'][^"']*chapter-title-banner[^"']*["'][^>]*>([\s\S]*?)<\/h2>/i));
   if (!title) title = htmlToText(firstMatch(html, /<h1\b[^>]*>([\s\S]*?)<\/h1>/i));
   if (!title) {
-    const decoded = decodeNextFlightEscapes(html);
-    title = htmlToText(firstMatch(decoded, /"chapter"\s*:\s*\{[\s\S]{0,500}?"title"\s*:\s*"([^"]+)"/i));
+    const flightStream = getNextFlightStream(html);
+    if (flightStream) {
+      const markerIndex = flightStream.indexOf('"chapter":');
+      if (markerIndex >= 0) {
+        const raw = extractBalanced(flightStream, markerIndex, "{", "}");
+        if (raw) {
+          try {
+            const chapObj = JSON.parse(raw);
+            if (chapObj && chapObj.title) {
+              title = htmlToText(chapObj.title);
+            }
+          } catch (e) {}
+        }
+      }
+      if (!title) {
+        title = htmlToText(firstMatch(flightStream, /"chapter"\s*:\s*\{[\s\S]{0,500}?"title"\s*:\s*"((?:[^"\\]|\\.)*)"/i));
+      }
+    }
   }
   return title || fallbackTitle || "Chuong";
 }
