@@ -18,16 +18,16 @@ function register() {
       {
         id: "username",
         type: "text",
-        label: "Email / Tên đăng nhập",
-        placeholder: "Nhập email hoặc username DocLN",
-        required: true
+        label: "Email / Tên đăng nhập (Tùy chọn)",
+        placeholder: "Nhập email hoặc username DocLN nếu truyện/chương yêu cầu đăng nhập",
+        required: false
       },
       {
         id: "password",
         type: "password",
-        label: "Mật khẩu",
+        label: "Mật khẩu (Tùy chọn)",
         placeholder: "Nhập mật khẩu",
-        required: true
+        required: false
       },
       {
         id: "downloadMode",
@@ -308,38 +308,40 @@ function decodeProtectedChunk(chunk, strategy, key) {
 
 function decodeProtectedChapterContent(html) {
   let source = String(html || "");
-  const protectedTag = source.match(/<div\b[^>]*\bid=["']chapter-c-protected["'][^>]*>/i);
-  if (!protectedTag) return source;
+  let match;
+  while ((match = source.match(/<div\b[^>]*\bid=["']chapter-c-protected["'][^>]*>/i)) !== null) {
+    const tag = match[0];
+    const strategy = attrValue(tag, "data-s") || "none";
+    const key = attrValue(tag, "data-k") || "";
+    const rawChunks = decodeEntities(attrValue(tag, "data-c") || "[]");
+    let chunks = [];
+    try {
+      chunks = JSON.parse(rawChunks);
+    } catch (e) {
+      break;
+    }
+    if (!chunks || !chunks.length) break;
 
-  const tag = protectedTag[0];
-  const strategy = attrValue(tag, "data-s") || "none";
-  const key = attrValue(tag, "data-k") || "";
-  const rawChunks = decodeEntities(attrValue(tag, "data-c") || "[]");
-  let chunks = [];
-  try {
-    chunks = JSON.parse(rawChunks);
-  } catch (e) {
-    return source;
+    chunks.sort(function(a, b) {
+      return parseInt(String(a).substring(0, 4), 10) - parseInt(String(b).substring(0, 4), 10);
+    });
+
+    let decoded = "";
+    for (let i = 0; i < chunks.length; i++) {
+      decoded += decodeProtectedChunk(chunks[i], strategy, key);
+    }
+    decoded = decoded.replace(/\[note(\d+)\]/gi, '<span id="anchor-note$1" class="note-icon">[note]</span>');
+
+    const start = match.index;
+    const openEnd = start + tag.length;
+    const closeIdx = source.indexOf("</div>", openEnd);
+    if (closeIdx < 0) {
+      source = source.slice(0, start) + decoded + source.slice(openEnd);
+    } else {
+      source = source.slice(0, start) + decoded + source.slice(closeIdx + 6);
+    }
   }
-  if (!chunks || !chunks.length) return source;
-
-  chunks.sort(function(a, b) {
-    return parseInt(String(a).substring(0, 4), 10) - parseInt(String(b).substring(0, 4), 10);
-  });
-
-  let decoded = "";
-  for (let i = 0; i < chunks.length; i++) {
-    decoded += decodeProtectedChunk(chunks[i], strategy, key);
-  }
-  decoded = decoded.replace(/\[note(\d+)\]/gi, '<span id="anchor-note$1" class="note-icon">[note]</span>');
-
-  const start = protectedTag.index;
-  const openEnd = start + tag.length;
-  const closeIdx = source.indexOf("</div>", openEnd);
-  if (closeIdx < 0) {
-    return source.slice(0, start) + decoded + source.slice(openEnd);
-  }
-  return source.slice(0, start) + decoded + source.slice(closeIdx + 6);
+  return source;
 }
 
 function innerById(html, id) {
@@ -747,52 +749,66 @@ function run(params) {
   const session = http.newSession();
   let storyUrl = absolutize(normalizeHakoInputURL(params.url), baseUrl);
 
-  console.log("[*] Hako domain: " + baseUrl);
-  console.log("[*] Đang mở trang đăng nhập Hako...");
-  const loginUrl = baseUrl + "/login";
-  const loginPage = session.Get(loginUrl, {});
-  if (!loginPage || loginPage.Status !== 200) {
-    throw new Error("Không thể tải trang đăng nhập. HTTP Status: " + (loginPage ? loginPage.Status : "không có phản hồi"));
-  }
+  const hasAuth = !!(params.username && params.password && String(params.username).trim() && String(params.password).trim());
+  if (hasAuth) {
+    console.log("[*] Hako domain: " + baseUrl);
+    console.log("[*] Đang mở trang đăng nhập Hako...");
+    const loginUrl = baseUrl + "/login";
+    const loginPage = session.Get(loginUrl, {});
+    if (!loginPage || loginPage.Status !== 200) {
+      throw new Error("Không thể tải trang đăng nhập. HTTP Status: " + (loginPage ? loginPage.Status : "không có phản hồi"));
+    }
 
-  if (isAuthenticatedPage(loginPage.Body)) {
-    console.log("[*] Existing Hako login session detected; skipping login POST.");
+    if (isAuthenticatedPage(loginPage.Body)) {
+      console.log("[*] Existing Hako login session detected; skipping login POST.");
+    } else {
+      const csrfToken = extractInputValue(loginPage.Body, "_token");
+      if (!csrfToken) {
+        throw new Error("Không tìm thấy CSRF _token trên trang đăng nhập.");
+      }
+
+      const loginResp = session.Post(loginUrl, {
+        _token: csrfToken,
+        name: params.username,
+        password: params.password,
+        remember: "on"
+      }, {
+        "Referer": loginUrl,
+        "Content-Type": "application/x-www-form-urlencoded"
+      });
+
+      if (!loginResp) {
+        throw new Error("Đăng nhập thất bại: không nhận được phản hồi từ máy chủ.");
+      }
+      if (loginResp.Status >= 400) {
+        throw new Error("Đăng nhập thất bại. HTTP Status: " + loginResp.Status);
+      }
+      const loginError = extractLoginError(loginResp.Body);
+      if (loginError || isLoginPage(loginResp.Body)) {
+        throw new Error(loginError ? "Đăng nhập thất bại: " + loginError : "Đăng nhập thất bại. Tài khoản hoặc mật khẩu không đúng, hoặc phiên đăng nhập đã hết hạn.");
+      }
+    }
+    console.log("[+] Đăng nhập Hako thành công!");
   } else {
-    const csrfToken = extractInputValue(loginPage.Body, "_token");
-    if (!csrfToken) {
-      throw new Error("Không tìm thấy CSRF _token trên trang đăng nhập.");
-    }
-
-    const loginResp = session.Post(loginUrl, {
-      _token: csrfToken,
-      name: params.username,
-      password: params.password,
-      remember: "on"
-    }, {
-      "Referer": loginUrl,
-      "Content-Type": "application/x-www-form-urlencoded"
-    });
-
-    if (!loginResp) {
-      throw new Error("Đăng nhập thất bại: không nhận được phản hồi từ máy chủ.");
-    }
-    if (loginResp.Status >= 400) {
-      throw new Error("Đăng nhập thất bại. HTTP Status: " + loginResp.Status);
-    }
-    const loginError = extractLoginError(loginResp.Body);
-    if (loginError || isLoginPage(loginResp.Body)) {
-      throw new Error(loginError ? "Đăng nhập thất bại: " + loginError : "Đăng nhập thất bại. Tài khoản hoặc mật khẩu không đúng, hoặc phiên đăng nhập đã hết hạn.");
-    }
+    console.log("[*] Hako domain: " + baseUrl);
+    console.log("[*] Không cung cấp thông tin đăng nhập, tiếp tục tải chế độ công khai...");
   }
-  console.log("[+] Đăng nhập Hako thành công!");
 
   console.log("[*] Đang tải trang truyện: " + storyUrl);
-  const seriesResp = session.Get(storyUrl, {});
+  let seriesResp = null;
+  try {
+    seriesResp = session.GetFast(storyUrl, { "Referer": baseUrl });
+  } catch (e) {
+    seriesResp = null;
+  }
+  if (!seriesResp || seriesResp.Status !== 200) {
+    seriesResp = session.Get(storyUrl, {});
+  }
   if (!seriesResp || seriesResp.Status !== 200) {
     throw new Error("Không thể tải trang truyện. HTTP Status: " + (seriesResp ? seriesResp.Status : "không có phản hồi"));
   }
   if (isLoginPage(seriesResp.Body)) {
-    throw new Error("Đăng nhập thất bại hoặc phiên đăng nhập không còn hợp lệ.");
+    throw new Error("Truyện yêu cầu đăng nhập. Vui lòng nhập tài khoản và mật khẩu.");
   }
 
   let canonicalUrl = extractMeta(seriesResp.Body, "og:url");
@@ -826,10 +842,10 @@ function run(params) {
 
     while (attempt < maxAttempts) {
       try {
-        chapResp = session.Get(chap.url, {});
+        chapResp = session.GetFast(chap.url, { "Referer": storyUrl });
         if (chapResp && chapResp.Status === 200) {
           if (isLoginPage(chapResp.Body)) {
-            throw new Error("Phiên đăng nhập hết hạn khi tải chương.");
+            throw new Error("Chương yêu cầu đăng nhập hoặc phiên đăng nhập hết hạn.");
           }
           break;
         }
@@ -869,6 +885,29 @@ function run(params) {
     if (!content) {
       content = firstMatch(chapResp.Body, /<div[^>]*id=["']chapter-c-protected["'][^>]*>([\s\S]*?)<\/div>/i);
       content = decodeProtectedChapterContent(content);
+    }
+    if (!content) {
+      content = firstMatch(chapResp.Body, /<div[^>]*id=["']chapter-content["'][^>]*>([\s\S]*?)<\/div>/i);
+      content = decodeProtectedChapterContent(content);
+    }
+
+    if (!content || (!/<img\b/i.test(content) && htmlToText(content).length < 10)) {
+      try {
+        const browserResp = session.Get(chap.url, {});
+        if (browserResp && browserResp.Status === 200) {
+          let bContent = innerById(browserResp.Body, "chapter-content");
+          bContent = decodeProtectedChapterContent(bContent);
+          if (!bContent) {
+            bContent = firstMatch(browserResp.Body, /<div[^>]*id=["']chapter-c-protected["'][^>]*>([\s\S]*?)<\/div>/i);
+            bContent = decodeProtectedChapterContent(bContent);
+          }
+          if (bContent && (/<img\b/i.test(bContent) || htmlToText(bContent).length >= 10)) {
+            content = bContent;
+            chapResp = browserResp;
+          }
+        }
+      } catch (e) {
+      }
     }
 
     content = sanitizeHTML(content);

@@ -112,7 +112,7 @@ npm run native
 You can write custom Javascript crawler extensions to scrape external sites and automatically generate EPUB books.
 
 Built-in origin extensions currently include:
-- `hako2epub`: DocLN/Hako crawler with login support and one EPUB per source volume.
+- `hako2epub`: DocLN/Hako crawler with optional login, fast HTTP chunk streaming, automatic Cloudflare fallback, and one EPUB per source volume.
 - `jukaza2epub`: Jukaza crawler with reader API decryption.
 - `valvrareteam2epub`: Valvrareteam crawler, reading Next.js module data and exporting each source volume as a separate EPUB. Optional account login unlocks protected chapters through the full-content API; chapters still inaccessible after login are kept as placeholder entries instead of stopping the whole run.
 

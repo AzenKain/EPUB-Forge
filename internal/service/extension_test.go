@@ -1,10 +1,12 @@
 package service
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +125,52 @@ func TestValvrareteamExtension(t *testing.T) {
 	}
 
 	t.Logf("Created %d EPUB file(s): %v, warnings: %v", len(createdFiles), createdFiles, warnings)
+}
+
+func TestHakoExtension(t *testing.T) {
+	tmpDir := t.TempDir()
+	svc, err := New(tmpDir, "dev")
+	if err != nil {
+		t.Fatalf("failed to init service: %v", err)
+	}
+	defer svc.Close()
+
+	params := map[string]any{
+		"url":             "https://docln.sbs/truyen/25592-co-ban-cung-lop-duoc-yeu-quy-chi-mim-cuoi-voi-toi",
+		"downloadMode":    "single_chapter",
+		"startChapterUrl": "https://docln.sbs/truyen/25592-co-ban-cung-lop-duoc-yeu-quy-chi-mim-cuoi-voi-toi/c345139-minh-hoa",
+		"endChapterUrl":   "https://docln.sbs/truyen/25592-co-ban-cung-lop-duoc-yeu-quy-chi-mim-cuoi-voi-toi/c345139-minh-hoa",
+	}
+
+	var logs bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	createdFiles, warnings, err := svc.RunExtension(ctx, "hako2epub", params, &logs)
+	t.Logf("LOGS:\n%s", logs.String())
+	if err != nil {
+		t.Fatalf("RunExtension failed: %v", err)
+	}
+	if len(createdFiles) == 0 {
+		t.Fatalf("expected created epub files, got 0")
+	}
+	t.Logf("Created %d EPUB file(s): %v, warnings: %v", len(createdFiles), createdFiles, warnings)
+
+	epubPath := filepath.Join(tmpDir, "edit", createdFiles[0])
+	r, err := zip.OpenReader(epubPath)
+	if err != nil {
+		t.Fatalf("zip.OpenReader failed: %v", err)
+	}
+	defer r.Close()
+
+	var imageCount int
+	for _, f := range r.File {
+		if strings.HasPrefix(f.Name, "OEBPS/images/") || strings.HasPrefix(f.Name, "images/") {
+			imageCount++
+			t.Logf("Embedded image inside EPUB: %s (size: %d bytes)", f.Name, f.UncompressedSize64)
+		}
+	}
+	t.Logf("Total images inside generated EPUB: %d", imageCount)
 }
 
 

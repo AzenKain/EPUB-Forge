@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -34,18 +35,18 @@ import (
 )
 
 type ExtensionInput struct {
-	ID           string `json:"id"`
-	Type         string `json:"type"`
-	Label        string `json:"label"`
-	Placeholder  string `json:"placeholder,omitempty"`
-	Options      []struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	Label       string `json:"label"`
+	Placeholder string `json:"placeholder,omitempty"`
+	Options     []struct {
 		Value       string `json:"value"`
 		Label       string `json:"label"`
 		Description string `json:"description,omitempty"`
 	} `json:"options,omitempty"`
-	VisibleWhen map[string]any `json:"visibleWhen,omitempty"`
-	DefaultValue any    `json:"defaultValue,omitempty"`
-	Required     bool   `json:"required"`
+	VisibleWhen  map[string]any `json:"visibleWhen,omitempty"`
+	DefaultValue any            `json:"defaultValue,omitempty"`
+	Required     bool           `json:"required"`
 }
 
 type ExtensionInfo struct {
@@ -219,7 +220,7 @@ func (s *JSSession) Get(urlStr string, headers map[string]string) (*JSSessionRes
 	if err != nil {
 		return nil, fmt.Errorf("lỗi điều hướng: %w", err)
 	}
-	loadPage := s.page.Timeout(45 * time.Second)
+	loadPage := s.page.Timeout(30 * time.Second)
 	if err := loadPage.WaitLoad(); err != nil && s.logWriter != nil {
 		fmt.Fprintf(s.logWriter, "[*] Không chờ được sự kiện load hoàn tất, tiếp tục đọc DOM hiện tại: %v\n", err)
 	}
@@ -323,11 +324,11 @@ func isCloudflareResponse(resp *JSSessionResponse) bool {
 		return true
 	}
 	html := resp.Body
-	if strings.Contains(html, "challenge-form") || 
-		strings.Contains(html, "/cdn-cgi/challenge-platform/") || 
-		strings.Contains(html, "cf-challenge") || 
-		strings.Contains(html, "cf-turnstile") || 
-		strings.Contains(html, "Just a moment...") || 
+	if strings.Contains(html, "challenge-form") ||
+		strings.Contains(html, "/cdn-cgi/challenge-platform/") ||
+		strings.Contains(html, "cf-challenge") ||
+		strings.Contains(html, "cf-turnstile") ||
+		strings.Contains(html, "Just a moment...") ||
 		strings.Contains(html, "turnstile-wrapper") {
 		return true
 	}
@@ -491,9 +492,7 @@ func payloadToStringMap(payload any) (map[string]string, bool) {
 			values[k] = fmt.Sprintf("%v", v)
 		}
 	case map[string]string:
-		for k, v := range m {
-			values[k] = v
-		}
+		maps.Copy(values, m)
 	default:
 		return nil, false
 	}
@@ -530,7 +529,7 @@ func (s *JSSession) submitFormInPage(urlStr string, payload any) (*JSSessionResp
 		}
 	`
 
-	navPage := s.page.Timeout(45 * time.Second)
+	navPage := s.page.Timeout(30 * time.Second)
 	defer navPage.CancelTimeout()
 	wait := navPage.WaitNavigation(proto.PageLifecycleEventNameLoad)
 
@@ -644,7 +643,7 @@ func (s *JSSession) GetBinariesBase64(urlsVal any, headers map[string]string) (m
 	results := make(map[string]string)
 	var mu sync.Mutex
 
-	sem := make(chan struct{}, 8) 
+	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
 
 	for _, u := range urls {
