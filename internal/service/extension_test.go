@@ -93,8 +93,8 @@ func TestExtensionChoiceFlow(t *testing.T) {
 }
 
 func TestValvrareteamExtension(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping network extension test in short mode")
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("skipping network extension test in short/CI mode")
 	}
 	svc, err := New(t.TempDir(), "dev")
 	if err != nil {
@@ -128,6 +128,9 @@ func TestValvrareteamExtension(t *testing.T) {
 }
 
 func TestHakoExtension(t *testing.T) {
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("skipping network extension test in short/CI mode")
+	}
 	tmpDir := t.TempDir()
 	svc, err := New(tmpDir, "dev")
 	if err != nil {

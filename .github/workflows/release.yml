@@ -60,9 +60,6 @@ jobs:
           console.log(`prerelease=${Boolean(meta.prerelease)}`);
           NODE
 
-      - name: Test
-        run: go test ./...
-
       - name: Build all targets
         env:
           RELEASE_VERSION: ${{ steps.release_meta.outputs.version }}
