@@ -176,4 +176,57 @@ func TestHakoExtension(t *testing.T) {
 	t.Logf("Total images inside generated EPUB: %d", imageCount)
 }
 
+func TestSonakoExtension(t *testing.T) {
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("skipping network extension test in short/CI mode")
+	}
+	tmpDir := t.TempDir()
+	svc, err := New(tmpDir, "dev")
+	if err != nil {
+		t.Fatalf("failed to init service: %v", err)
+	}
+	defer svc.Close()
+
+	params := map[string]any{
+		"url":             "https://sonako.fandom.com/vi/wiki/Taimadou_Gakuen_35_Shiken_Shoutai",
+		"downloadMode":    "chapter_range",
+		"startChapterUrl": "https://sonako.fandom.com/vi/wiki/Taimadou_Gakuen_35_Shiken_Shoutai_T%E1%BA%ADp_1_Minh_h%E1%BB%8Da",
+		"endChapterUrl":   "https://sonako.fandom.com/vi/wiki/Taimadou_Gakuen_35_Shiken_Shoutai_T%E1%BA%ADp_1_Ch%C6%B0%C6%A1ng_1",
+	}
+
+	var logs bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	createdFiles, warnings, err := svc.RunExtension(ctx, "sonako2epub", params, &logs)
+	t.Logf("LOGS:\n%s", logs.String())
+	if err != nil {
+		t.Fatalf("RunExtension failed: %v", err)
+	}
+	if len(createdFiles) == 0 {
+		t.Fatalf("expected created epub files, got 0")
+	}
+	t.Logf("Created %d EPUB file(s): %v, warnings: %v", len(createdFiles), createdFiles, warnings)
+
+	epubPath := filepath.Join(tmpDir, "edit", createdFiles[0])
+	r, err := zip.OpenReader(epubPath)
+	if err != nil {
+		t.Fatalf("zip.OpenReader failed: %v", err)
+	}
+	defer r.Close()
+
+	var imageCount int
+	for _, f := range r.File {
+		if strings.HasPrefix(f.Name, "OEBPS/images/") || strings.HasPrefix(f.Name, "images/") {
+			imageCount++
+			t.Logf("Embedded image inside EPUB: %s (size: %d bytes)", f.Name, f.UncompressedSize64)
+		}
+	}
+	t.Logf("Total images inside generated EPUB: %d", imageCount)
+	if imageCount == 0 {
+		t.Fatalf("expected embedded illustration images, got 0")
+	}
+}
+
+
 
