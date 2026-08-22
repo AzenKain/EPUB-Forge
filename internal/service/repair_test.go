@@ -124,4 +124,49 @@ func TestValidateXMLWellFormed(t *testing.T) {
 	}
 }
 
+func TestRepairFixForIssue(t *testing.T) {
+	tests := []struct {
+		code      string
+		wantFixID string
+		wantOk    bool
+	}{
+		{"MANIFEST_ORPHAN_DOCUMENT", "REMOVE_MISSING_MANIFEST_ITEMS", true},
+		{"NCX_DUMMY_DUPLICATE_LINK", "FIX_TOC_NCX", true},
+		{"NCX_TARGET_NOT_IN_SPINE", "FIX_TOC_NCX", true},
+		{"TOC_NAV_NCX_MISMATCH", "FIX_TOC_NCX", true},
+		{"MANIFEST_FILE_MISSING", "REMOVE_MISSING_MANIFEST_ITEMS", true},
+		{"UNKNOWN_CODE", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.code, func(t *testing.T) {
+			fixID, ok := repairFixForIssue(tt.code)
+			if ok != tt.wantOk || fixID != tt.wantFixID {
+				t.Errorf("repairFixForIssue(%q) = (%q, %v), want (%q, %v)", tt.code, fixID, ok, tt.wantFixID, tt.wantOk)
+			}
+		})
+	}
+}
+
+func TestParseNavTOCPoints(t *testing.T) {
+	navHTML := `
+<nav epub:type="toc">
+  <ol>
+    <li><a href="c1.xhtml">Chapter 1</a></li>
+    <li><a href="c2.xhtml#part1">Chapter 2</a></li>
+  </ol>
+</nav>`
+	points := parseNavTOCPoints(navHTML, "OEBPS/Text")
+	if len(points) != 2 {
+		t.Fatalf("parseNavTOCPoints len = %d, want 2", len(points))
+	}
+	if points[0].Title != "Chapter 1" || points[0].FullPath != "OEBPS/Text/c1.xhtml" {
+		t.Errorf("point[0] = %+v, want Title='Chapter 1', FullPath='OEBPS/Text/c1.xhtml'", points[0])
+	}
+	if points[1].Title != "Chapter 2" || points[1].FullPath != "OEBPS/Text/c2.xhtml" {
+		t.Errorf("point[1] = %+v, want Title='Chapter 2', FullPath='OEBPS/Text/c2.xhtml'", points[1])
+	}
+}
+
+
 

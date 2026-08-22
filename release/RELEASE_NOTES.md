@@ -1,14 +1,14 @@
-# Prebuild Version 2.4.4
+# Prebuild Version 2.4.5
 
 ## Thay đổi chính
 
-- **Nâng cấp & Sửa lỗi Hako / DocLN Extension (`hako2epub`)**:
-  - Tối ưu tốc độ tải và loại bỏ nghẽn tài nguyên trình duyệt bằng `session.GetFast` kết hợp cơ chế tự động chuyển sang trình duyệt ảo khi phát hiện Cloudflare / Turnstile.
-  - Khắc phục triệt để lỗi `context deadline exceeded` và `Không tìm thấy nội dung chương hoặc nội dung bị khóa` khi tải các bộ truyện/volume nhiều chương.
-  - Hỗ trợ chế độ đăng nhập tùy chọn (Optional Login): Có thể tải ngay các truyện/chương công khai mà không bắt buộc nhập tài khoản; tự động đăng nhập khi cung cấp thông tin xác thực.
-  - Cải tiến vòng lặp giải mã nội dung bảo vệ (`chapter-c-protected`) và hỗ trợ tải ảnh minh họa song song đa luồng vào EPUB.
-- **Đồng bộ Timeout trình duyệt & mạng (30s)**:
-  - Cập nhật chuẩn Timeout điều hướng `WaitLoad` và nạp form thành 30 giây, đồng bộ với toàn bộ HTTP Client và bộ tải tài nguyên để tối ưu độ ổn định trên mạng yếu/lag.
+- **Nâng cấp toàn diện tính năng Kiểm tra & Sửa EPUB (Validate & Repair)**:
+  - **Phát hiện & Dọn dẹp file mồ côi (`MANIFEST_ORPHAN_DOCUMENT`)**: Tự động phát hiện các file HTML được khai báo trong manifest nhưng không nằm trong danh sách đọc (spine), dọn sạch khỏi manifest và loại bỏ hoàn toàn khỏi gói nén ZIP khi lưu.
+  - **Làm sạch & Đồng bộ mục lục NCX (`FIX_TOC_NCX`)**: Tự động lọc sạch các đề mục volume rác trỏ về trang mục lục HTML (như *Minh họa LN*, *WN*, *Manga*, *Vol 1*), loại bỏ các liên kết trỏ ra ngoài spine và chuẩn hóa lại toàn bộ `playOrder`.
+  - **Đồng bộ chuẩn hiển thị đa nền tảng (`TOC_NAV_NCX_MISMATCH`)**: Đồng bộ danh sách chương giữa EPUB 3 (`nav.xhtml`) và EPUB 2 (`toc.ncx`), giúp sách hiển thị mục lục nhất quán và chuẩn xác trên mọi trình đọc (Apple Books, Moon+ Reader, Calibre, Kindle, KOReader, Thorium...).
+- **Cải tiến giao diện Kiểm tra & Sửa (Repair Modal UI)**:
+  - Bổ sung các tác vụ sửa nhanh: *Dọn dẹp file mồ côi & manifest*, *Làm sạch & Đồng bộ mục lục NCX*, *Chuẩn hóa mimetype*.
+  - Hiển thị nhãn giải thích tiếng Việt trực quan cho từng lỗi có thể khắc phục.
 
 ## Ghi chú
 

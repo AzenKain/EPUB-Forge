@@ -41,7 +41,7 @@ func repairFixForIssue(code string) (string, bool) {
 		return "PACKAGE_MIMETYPE", true
 	case "OPF_VERSION_LEGACY", "METADATA_MODIFIED_MISSING", "NAV_MISSING":
 		return "UPGRADE_EPUB3", true
-	case "MANIFEST_FILE_MISSING", "SPINE_IDREF_MISSING":
+	case "MANIFEST_FILE_MISSING", "SPINE_IDREF_MISSING", "MANIFEST_ORPHAN_DOCUMENT":
 		return "REMOVE_MISSING_MANIFEST_ITEMS", true
 	case "MANIFEST_MEDIA_TYPE_PARAMETER", "MANIFEST_MEDIA_TYPE_MISMATCH":
 		return "FIX_MEDIA_TYPES", true
@@ -49,7 +49,7 @@ func repairFixForIssue(code string) (string, bool) {
 		return "ADD_UNMANIFESTED_FILES", true
 	case "XHTML_XML", "XHTML_NAMESPACE":
 		return "FIX_XHTML", true
-	case "NCX_XML", "NCX_LINK_MISSING", "NCX_IDREF_MISSING":
+	case "NCX_XML", "NCX_LINK_MISSING", "NCX_IDREF_MISSING", "NCX_DUMMY_DUPLICATE_LINK", "NCX_TARGET_NOT_IN_SPINE", "TOC_NAV_NCX_MISMATCH":
 		return "FIX_TOC_NCX", true
 	case "VISIBLE_TOC_PAGE_MISSING":
 		return "BUILD_TOC_PAGE", true
@@ -194,14 +194,24 @@ func (ctx *BookContext) validateManifestAndSpine(b *validationBuilder) {
 	if len(ctx.Spine) == 0 {
 		b.add("error", "SPINE_EMPTY", ctx.OPFPath, "spine must contain at least one itemref")
 	}
+	spinePathSet := map[string]bool{}
 	for _, ref := range ctx.Spine {
 		item, ok := ctx.ManifestByID[ref.IDRef]
 		if !ok {
 			b.add("error", "SPINE_IDREF_MISSING", ctx.OPFPath, "spine itemref points to missing manifest id: "+ref.IDRef)
 			continue
 		}
+		spinePathSet[item.FullPath] = true
 		if !strings.Contains(item.MediaType, "xhtml") && !strings.Contains(item.MediaType, "html") {
 			b.add("warning", "SPINE_NON_DOCUMENT", item.FullPath, "spine item should point to an XHTML content document")
+		}
+	}
+
+	for _, item := range ctx.Manifest {
+		if isHTMLDocument(item.FullPath) {
+			if !spinePathSet[item.FullPath] && !hasPropertyToken(item.Attrs["properties"], "nav") {
+				b.add("warning", "MANIFEST_ORPHAN_DOCUMENT", item.FullPath, "File HTML mồ côi: được khai báo trong manifest nhưng không nằm trong danh sách đọc (spine)")
+			}
 		}
 	}
 
@@ -236,12 +246,20 @@ func (ctx *BookContext) validateNavigation(b *validationBuilder) {
 		}
 	}
 
+	spinePathSet := map[string]bool{}
+	for _, ref := range ctx.Spine {
+		if item, ok := ctx.ManifestByID[ref.IDRef]; ok {
+			spinePathSet[item.FullPath] = true
+		}
+	}
+
 	tocID := parseSpineTocID(ctx.OPFXML)
 	if tocID != "" {
 		if _, ok := ctx.ManifestByID[tocID]; !ok {
 			b.add("error", "NCX_IDREF_MISSING", ctx.OPFPath, "spine toc attribute points to missing manifest id: "+tocID)
 		}
 	}
+	var ncxPoints []TocPoint
 	if ctx.NCX != nil {
 		ncx, err := ctx.readText(ctx.NCX.FullPath)
 		if err != nil {
@@ -251,9 +269,31 @@ func (ctx *BookContext) validateNavigation(b *validationBuilder) {
 		if err := validateXMLWellFormed(ncx); err != nil {
 			b.add("error", "NCX_XML", ctx.NCX.FullPath, fmt.Sprintf("NCX is not well-formed XML: %v", err))
 		}
-		for _, point := range parseNCX(ncx, posixDir(ctx.NCX.FullPath)) {
+		ncxPoints = parseNCX(ncx, posixDir(ctx.NCX.FullPath))
+		indexPointsCount := 0
+		tocItem, _ := ctx.findVisibleTOCItem()
+		for _, point := range ncxPoints {
 			if point.FullPath == "" || ctx.Entries[point.FullPath] == nil {
 				b.add("error", "NCX_LINK_MISSING", ctx.NCX.FullPath, "NCX points to missing file: "+point.Src)
+			} else {
+				if isHTMLDocument(point.FullPath) && len(spinePathSet) > 0 && !spinePathSet[point.FullPath] {
+					b.add("warning", "NCX_TARGET_NOT_IN_SPINE", ctx.NCX.FullPath, "Mục lục NCX trỏ tới file không nằm trong spine: "+point.Src)
+				}
+			}
+			if tocItem != nil && point.FullPath == tocItem.FullPath {
+				indexPointsCount++
+			}
+		}
+		if indexPointsCount > 1 {
+			b.add("warning", "NCX_DUMMY_DUPLICATE_LINK", ctx.NCX.FullPath, fmt.Sprintf("Mục lục NCX chứa %d mục khác nhau cùng trỏ về trang mục lục HTML (%s)", indexPointsCount, tocItem.Href))
+		}
+	}
+
+	if navItem, ok := ctx.findNavDocumentItem(); ok && navItem != nil && ctx.NCX != nil {
+		if navText, err := ctx.readText(navItem.FullPath); err == nil {
+			navPoints := parseNavTOCPoints(navText, posixDir(navItem.FullPath))
+			if len(navPoints) > 0 && len(ncxPoints) > 0 && len(navPoints) != len(ncxPoints) {
+				b.add("warning", "TOC_NAV_NCX_MISMATCH", ctx.NCX.FullPath, fmt.Sprintf("Mục lục EPUB 3 (%d mục) và EPUB 2 NCX (%d mục) không đồng bộ số lượng mục", len(navPoints), len(ncxPoints)))
 			}
 		}
 	}
@@ -430,3 +470,44 @@ func isCoverPage(ch models.Chapter) bool {
 		strings.Contains(lowerPath, "titlepage") ||
 		strings.Contains(lowerPath, "cover")
 }
+
+func isHTMLDocument(p string) bool {
+	lower := strings.ToLower(p)
+	return strings.HasSuffix(lower, ".xhtml") || strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm")
+}
+
+func (ctx *BookContext) findNavDocumentItem() (*ManifestItem, bool) {
+	for _, item := range ctx.Manifest {
+		if hasPropertyToken(item.Attrs["properties"], "nav") {
+			copy := item
+			return &copy, true
+		}
+	}
+	for _, item := range ctx.Manifest {
+		lower := strings.ToLower(item.FullPath)
+		if strings.HasSuffix(lower, "nav.xhtml") || strings.HasSuffix(lower, "nav.html") {
+			copy := item
+			return &copy, true
+		}
+	}
+	return nil, false
+}
+
+func parseNavTOCPoints(navHTML, navDir string) []TocPoint {
+	var points []TocPoint
+	reA := regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*["']([^"']*)["'][^>]*>(.*?)</a>`)
+	for _, m := range reA.FindAllStringSubmatch(navHTML, -1) {
+		if len(m) >= 3 {
+			href := m[1]
+			title := cleanText(stripTags(m[2]))
+			cleanHref := strings.Split(href, "#")[0]
+			points = append(points, TocPoint{
+				Title:    title,
+				Src:      href,
+				FullPath: resolveZipHref(navDir, cleanHref),
+			})
+		}
+	}
+	return points
+}
+

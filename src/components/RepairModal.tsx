@@ -23,21 +23,50 @@ const severityColor = {
   info: "#35658f"
 };
 
+const fixLabels: Record<string, string> = {
+  REMOVE_MISSING_MANIFEST_ITEMS: "Dọn dẹp file mồ côi & manifest",
+  FIX_TOC_NCX: "Sửa & Đồng bộ mục lục NCX",
+  PACKAGE_MIMETYPE: "Chuẩn hóa file mimetype",
+  UPGRADE_EPUB3: "Nâng cấp lên EPUB 3",
+  FIX_MEDIA_TYPES: "Sửa media-type file",
+  ADD_UNMANIFESTED_FILES: "Khai báo file thiếu vào manifest",
+  FIX_XHTML: "Sửa lỗi cú pháp XHTML",
+  CLEAN_BROKEN_CONTENT_LINKS: "Dọn liên kết hỏng",
+  BUILD_TOC_PAGE: "Xây dựng trang mục lục HTML",
+  BUILD_COVER_PAGE: "Xây dựng trang bìa",
+  BUILD_CHAPTER_TITLES: "Xây dựng lại tiêu đề chương"
+};
+
 const manualRepairTasks = [
   {
+    fixId: "REMOVE_MISSING_MANIFEST_ITEMS",
+    title: "Dọn dẹp file mồ côi & manifest",
+    description: "Loại bỏ các file HTML mồ côi ngoài spine và manifest item hỏng khỏi EPUB."
+  },
+  {
+    fixId: "FIX_TOC_NCX",
+    title: "Làm sạch & Đồng bộ mục lục NCX",
+    description: "Loại bỏ đề mục volume rác, liên kết mồ côi và chuẩn hóa thứ tự playOrder."
+  },
+  {
     fixId: "BUILD_TOC_PAGE",
-    title: "Xây dựng trang mục lục",
+    title: "Xây dựng trang mục lục HTML",
     description: "Tạo hoặc dựng lại trang TOC hiển thị trong spine từ danh sách chương hiện tại."
   },
   {
     fixId: "BUILD_COVER_PAGE",
-    title: "Xây dựng trang cover",
+    title: "Xây dựng trang bìa",
     description: "Tạo hoặc dựng lại trang bìa XHTML từ ảnh cover có trong EPUB và đưa lên đầu spine."
   },
   {
     fixId: "BUILD_CHAPTER_TITLES",
     title: "Xây dựng lại tiêu đề chương",
     description: "Tự động bổ sung thẻ tiêu đề (h2) hiển thị ở đầu mỗi chương nếu file chưa có tiêu đề."
+  },
+  {
+    fixId: "PACKAGE_MIMETYPE",
+    title: "Chuẩn hóa mimetype",
+    description: "Đảm bảo mimetype nằm ở vị trí đầu tiên không nén theo chuẩn IDPF EPUB."
   }
 ];
 
@@ -262,8 +291,11 @@ export function RepairModal({ open, bookId, bookTitle, onClose, onSuccess }: Pro
                             ) : null}
                           </div>
                           <div style={{ color: "#27231e", lineHeight: 1.4, overflowWrap: "anywhere" }}>{issue.message}</div>
-                          {issue.fixable ? (
-                            <div style={{ color: "#1f624d", marginTop: "4px", fontSize: "11px" }}>Có thể sửa: {issue.fixId}</div>
+                          {issue.fixable && issue.fixId ? (
+                            <div style={{ color: "#1f624d", marginTop: "4px", fontSize: "11px", display: "flex", alignItems: "center", gap: "5px" }}>
+                              <Wrench size={12} />
+                              <span>Có thể sửa: <strong>{fixLabels[issue.fixId] || issue.fixId}</strong></span>
+                            </div>
                           ) : null}
                         </div>
                       </label>

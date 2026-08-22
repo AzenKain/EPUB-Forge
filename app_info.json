@@ -1,8 +1,8 @@
 {
   "productName": "EPUBForge",
-  "productVersion": "2.4.4",
+  "productVersion": "2.4.5",
   "fileDescription": "EPUBForge - Cross-platform EPUB Toolkit",
-  "fileVersion": "2.4.4",
+  "fileVersion": "2.4.5",
   "copyright": "Copyright (c) 2026 AzenKain. All rights reserved.",
   "author": "AzenKain"
 }

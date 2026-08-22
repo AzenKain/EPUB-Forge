@@ -79,6 +79,16 @@ func (s *Service) Repair(id string, fixes []string) (models.RepairResponse, erro
 			continue
 		}
 
+		lowerPath := strings.ToLower(item.FullPath)
+		isHTML := strings.HasSuffix(lowerPath, ".xhtml") || strings.HasSuffix(lowerPath, ".html") || strings.HasSuffix(lowerPath, ".htm")
+		if isHTML && !spineUsesID(ctx.Spine, item.ID) && !hasPropertyToken(item.Attrs["properties"], "nav") {
+			if selected.has("REMOVE_MISSING_MANIFEST_ITEMS") {
+				removedManifestIDs[item.ID] = true
+				logs = append(logs, fmt.Sprintf("[Manifest] Đã loại bỏ file HTML mồ côi khỏi manifest: %s (ID: %s)", item.Href, item.ID))
+				continue
+			}
+		}
+
 		if selected.has("FIX_MEDIA_TYPES") {
 			correctMediaType := contentTypeFor(item.FullPath)
 			if item.MediaType != correctMediaType {
@@ -286,12 +296,19 @@ func (s *Service) Repair(id string, fixes []string) (models.RepairResponse, erro
 		logs = append(logs, "[Mimetype] Đã chuẩn hóa mimetype ở vị trí đầu file và không nén.")
 	}
 
+	removedPaths := make(map[string]bool)
+	for _, item := range ctx.Manifest {
+		if removedManifestIDs[item.ID] {
+			removedPaths[item.FullPath] = true
+		}
+	}
+
 	written := map[string]bool{}
 	if normalizeMimetype {
 		written["mimetype"] = true
 	}
 	for _, f := range ctx.Reader.File {
-		if f.FileInfo().IsDir() || written[f.Name] {
+		if f.FileInfo().IsDir() || written[f.Name] || removedPaths[f.Name] {
 			continue
 		}
 
@@ -991,8 +1008,22 @@ func repairNCX(ctx *BookContext, validSpineRefs []SpineRef, editedFiles map[stri
 		return
 	}
 
+	spinePaths := map[string]bool{}
+	for _, ref := range validSpineRefs {
+		if item, ok := ctx.ManifestByID[ref.IDRef]; ok {
+			spinePaths[item.FullPath] = true
+		}
+	}
+	tocItem, _ := ctx.findVisibleTOCItem()
+	var visibleTOCPath string
+	if tocItem != nil {
+		visibleTOCPath = tocItem.FullPath
+	}
+
 	var updatedTOC []TocPoint
 	tocFixedCount := 0
+	seenTOCPage := false
+
 	for _, point := range ctx.TOC {
 		resolved := resolveZipHref(posixDir(ncxPath), point.Src)
 		if resolved == "" {
@@ -1004,6 +1035,22 @@ func repairNCX(ctx *BookContext, validSpineRefs []SpineRef, editedFiles map[stri
 		if !ok || removedManifestIDs[targetItem.ID] {
 			tocFixedCount++
 			*logs = append(*logs, fmt.Sprintf("[Mục lục] Đã loại bỏ liên kết hỏng: %s -> %s", point.Title, point.Src))
+			continue
+		}
+
+		lowerResolved := strings.ToLower(resolved)
+		isHTML := strings.HasSuffix(lowerResolved, ".xhtml") || strings.HasSuffix(lowerResolved, ".html") || strings.HasSuffix(lowerResolved, ".htm")
+
+		if isHTML && visibleTOCPath != "" && resolved == visibleTOCPath {
+			if seenTOCPage {
+				tocFixedCount++
+				*logs = append(*logs, fmt.Sprintf("[Mục lục] Đã loại bỏ đề mục thừa trỏ về trang mục lục: %s", point.Title))
+				continue
+			}
+			seenTOCPage = true
+		} else if isHTML && len(spinePaths) > 0 && !spinePaths[resolved] {
+			tocFixedCount++
+			*logs = append(*logs, fmt.Sprintf("[Mục lục] Đã loại bỏ mục trỏ tới file không có trong spine: %s -> %s", point.Title, point.Src))
 			continue
 		}
 
