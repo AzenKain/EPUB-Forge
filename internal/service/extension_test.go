@@ -228,5 +228,146 @@ func TestSonakoExtension(t *testing.T) {
 	}
 }
 
+func TestZumiNovelExtension(t *testing.T) {
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("skipping network extension test in short/CI mode")
+	}
+	tmpDir := t.TempDir()
+	svc, err := New(tmpDir, "dev")
+	if err != nil {
+		t.Fatalf("failed to init service: %v", err)
+	}
+	defer svc.Close()
+
+	params := map[string]any{
+		"url":             "https://zuminovel.com/novel/khi-nhung-ao-tuong-thanh-xuan-tro-thanh-hien-thuc",
+		"username":        os.Getenv("ZUMINOVEL_USERNAME"),
+		"password":        os.Getenv("ZUMINOVEL_PASSWORD"),
+		"downloadMode":    "chapter_range",
+		"startChapterUrl": "https://zuminovel.com/novel/khi-nhung-ao-tuong-thanh-xuan-tro-thanh-hien-thuc/read/ton-tp/chuong1otuoithanhxuanhoangduong-697ae8dfe8959d50fc85c23f",
+		"endChapterUrl":   "697ae8dfe8959d50fc85c245", // Chapter 2 ID
+	}
+
+	var logs bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	createdFiles, warnings, err := svc.RunExtension(ctx, "zuminovel2epub", params, &logs)
+	t.Logf("LOGS:\n%s", logs.String())
+	if err != nil {
+		t.Fatalf("RunExtension failed: %v", err)
+	}
+	if len(createdFiles) == 0 {
+		t.Fatalf("expected created epub files, got 0")
+	}
+	t.Logf("Created %d EPUB file(s): %v, warnings: %v", len(createdFiles), createdFiles, warnings)
+
+	epubPath := filepath.Join(tmpDir, "edit", createdFiles[0])
+	r, err := zip.OpenReader(epubPath)
+	if err != nil {
+		t.Fatalf("zip.OpenReader failed: %v", err)
+	}
+	defer r.Close()
+
+	t.Logf("EPUB file verified successfully. Entries count: %d", len(r.File))
+}
+
+func TestZumiNovelMultiVolume(t *testing.T) {
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("skipping network extension test in short/CI mode")
+	}
+	tmpDir := t.TempDir()
+	svc, err := New(tmpDir, "dev")
+	if err != nil {
+		t.Fatalf("failed to init service: %v", err)
+	}
+	defer svc.Close()
+
+	params := map[string]any{
+		"url":             "https://zuminovel.com/novel/thap-nhat-chung-yen",
+		"downloadMode":    "choose_volumes",
+		"volumeSelection": "1",
+		"startChapterUrl": "6a3cad423d774ead0e3d93aa", // Chap 1 of Volume 1
+		"endChapterUrl":   "6a3cad423d774ead0e3d93b3", // Chap 2 of Volume 1
+	}
+
+	var logs bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	createdFiles, warnings, err := svc.RunExtension(ctx, "zuminovel2epub", params, &logs)
+	t.Logf("LOGS:\n%s", logs.String())
+	if err != nil {
+		t.Fatalf("RunExtension failed: %v", err)
+	}
+	if len(createdFiles) == 0 {
+		t.Fatalf("expected created epub files, got 0")
+	}
+	t.Logf("Created %d EPUB file(s): %v, warnings: %v", len(createdFiles), createdFiles, warnings)
+
+	epubPath := filepath.Join(tmpDir, "edit", createdFiles[0])
+	r, err := zip.OpenReader(epubPath)
+	if err != nil {
+		t.Fatalf("zip.OpenReader failed: %v", err)
+	}
+	defer r.Close()
+
+	t.Logf("Multi-volume EPUB file verified successfully. Entries count: %d", len(r.File))
+}
+
+func TestNovestExtension(t *testing.T) {
+	if testing.Short() || os.Getenv("CI") != "" {
+		t.Skip("skipping network extension test in short/CI mode")
+	}
+	tmpDir := t.TempDir()
+	svc, err := New(tmpDir, "dev")
+	if err != nil {
+		t.Fatalf("failed to init service: %v", err)
+	}
+	defer svc.Close()
+
+	params := map[string]any{
+		"url":             "https://novest.me/truyen/muon-am-tham-ket-noi-cung-dong-hao-ngot",
+		"username":        os.Getenv("NOVEST_USERNAME"),
+		"password":        os.Getenv("NOVEST_PASSWORD"),
+		"downloadMode":    "chapter_range",
+		"startChapterUrl": "minh-hoa-22915",
+		"endChapterUrl":   "muon-am-tham-ket-noi-cung-dong-hao-ngot-vol-1-ch-1-mo-dau-dieu-muon-lam-khi-lon-len",
+	}
+
+	var logs bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	createdFiles, warnings, err := svc.RunExtension(ctx, "novest2epub", params, &logs)
+	t.Logf("LOGS:\n%s", logs.String())
+	if err != nil {
+		t.Fatalf("RunExtension failed: %v", err)
+	}
+	if len(createdFiles) == 0 {
+		t.Fatalf("expected created epub files, got 0")
+	}
+	t.Logf("Created %d EPUB file(s): %v, warnings: %v", len(createdFiles), createdFiles, warnings)
+
+	epubPath := filepath.Join(tmpDir, "edit", createdFiles[0])
+	r, err := zip.OpenReader(epubPath)
+	if err != nil {
+		t.Fatalf("zip.OpenReader failed: %v", err)
+	}
+	defer r.Close()
+
+	var imageCount int
+	for _, f := range r.File {
+		if strings.HasPrefix(f.Name, "OEBPS/images/") || strings.HasPrefix(f.Name, "images/") {
+			imageCount++
+			t.Logf("Embedded image inside EPUB: %s (size: %d bytes)", f.Name, f.UncompressedSize64)
+		}
+	}
+	t.Logf("Novest EPUB verified successfully. Total images: %d, Total files: %d", imageCount, len(r.File))
+	if imageCount == 0 {
+		t.Fatalf("expected embedded illustration images, got 0")
+	}
+}
+
 
 
