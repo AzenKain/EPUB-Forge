@@ -115,7 +115,14 @@ func New(workspaceDir string, version string) (*Service, error) {
 
 	if entries, err := os.ReadDir(editDir); err == nil {
 		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".tmp") {
+			if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+				subEntries, _ := os.ReadDir(filepath.Join(editDir, entry.Name()))
+				for _, sub := range subEntries {
+					if !sub.IsDir() && strings.HasSuffix(sub.Name(), ".tmp") {
+						_ = os.Remove(filepath.Join(editDir, entry.Name(), sub.Name()))
+					}
+				}
+			} else if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".tmp") {
 				_ = os.Remove(filepath.Join(editDir, entry.Name()))
 			}
 		}
@@ -212,6 +219,28 @@ func sanitizeFileNameLimit(input string, maxRunes int) string {
 	}
 	base := strings.TrimSuffix(clean, filepath.Ext(clean))
 	switch strings.ToUpper(base) {
+	case "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		clean = "_" + clean
+	}
+	return clean
+}
+
+func sanitizeFolderName(input string) string {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return ""
+	}
+	clean := regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]+`).ReplaceAllString(input, " ")
+	clean = strings.Join(strings.Fields(clean), " ")
+	clean = strings.Trim(clean, " .")
+	if clean == "" {
+		return ""
+	}
+	runes := []rune(clean)
+	if len(runes) > 120 {
+		clean = strings.Trim(string(runes[:120]), " .")
+	}
+	switch strings.ToUpper(clean) {
 	case "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
 		clean = "_" + clean
 	}
@@ -400,28 +429,82 @@ func (s *Service) ListEpubs() ([]EpubFile, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
 		if entry.IsDir() {
-			continue
+			folderName := entry.Name()
+			subPath := filepath.Join(editDir, folderName)
+			subEntries, err := os.ReadDir(subPath)
+			if err != nil {
+				continue
+			}
+			for _, subEntry := range subEntries {
+				if subEntry.IsDir() || strings.HasPrefix(subEntry.Name(), ".") {
+					continue
+				}
+				subName := subEntry.Name()
+				if !strings.HasSuffix(strings.ToLower(subName), ".epub") || strings.HasSuffix(strings.ToLower(subName), ".tmp") || strings.HasSuffix(strings.ToLower(subName), ".bak") {
+					continue
+				}
+				subInfo, err := subEntry.Info()
+				if err != nil {
+					continue
+				}
+				relPath := filepath.ToSlash(filepath.Join(folderName, subName))
+				list = append(list, EpubFile{
+					ID:     toID(relPath),
+					Name:   subName,
+					Path:   relPath,
+					Folder: folderName,
+					Size:   subInfo.Size(),
+				})
+			}
+		} else {
+			name := entry.Name()
+			if !strings.HasSuffix(strings.ToLower(name), ".epub") || strings.HasSuffix(strings.ToLower(name), ".tmp") || strings.HasSuffix(strings.ToLower(name), ".bak") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			list = append(list, EpubFile{
+				ID:     toID(name),
+				Name:   name,
+				Path:   name,
+				Folder: "",
+				Size:   info.Size(),
+			})
 		}
-		name := entry.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".epub") {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		list = append(list, EpubFile{
-			ID:   toID(name),
-			Name: name,
-			Size: info.Size(),
-		})
 	}
+
 	sort.Slice(list, func(i, j int) bool {
+		if list[i].Folder != list[j].Folder {
+			return strings.ToLower(list[i].Folder) < strings.ToLower(list[j].Folder)
+		}
 		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
 	})
 	return list, nil
+}
+
+func (s *Service) ListFolders() ([]string, error) {
+	var folders []string
+	entries, err := os.ReadDir(editDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+			folders = append(folders, entry.Name())
+		}
+	}
+	sort.Slice(folders, func(i, j int) bool {
+		return strings.ToLower(folders[i]) < strings.ToLower(folders[j])
+	})
+	return folders, nil
 }
 
 func (s *Service) Analyze(id string) (BookAnalysis, error) {
@@ -495,17 +578,29 @@ func (s *Service) SaveMetadata(id string, metadata models.BookMetadata) (models.
 	return normalized, nil
 }
 
-func (s *Service) UploadEpub(filename string, data []byte) (string, error) {
+func (s *Service) UploadEpub(filename string, data []byte, folder string) (string, error) {
 	filename = sanitizeFileName(filename)
 	if !strings.HasSuffix(strings.ToLower(filename), ".epub") {
 		filename += ".epub"
 	}
-	filePath := filepath.Join(editDir, filename)
+	targetDir := editDir
+	relName := filename
+
+	folder = strings.TrimSpace(folder)
+	if folder != "" {
+		rel, dir, err := findOrCreateFolder(editDir, folder)
+		if err == nil {
+			targetDir = dir
+			relName = filepath.ToSlash(filepath.Join(rel, filename))
+		}
+	}
+
+	filePath := filepath.Join(targetDir, filename)
 	err := os.WriteFile(filePath, data, 0644)
 	if err != nil {
 		return "", err
 	}
-	return filename, nil
+	return relName, nil
 }
 
 func (s *Service) DeleteEpub(id string) error {
@@ -577,9 +672,15 @@ func (s *Service) RenameEpub(id string, newName string) (EpubFile, error) {
 	lock.Lock()
 	defer lock.Unlock()
 
-	oldName, err := fromID(id)
+	oldRelName, err := fromID(id)
 	if err != nil {
 		return EpubFile{}, err
+	}
+
+	folder := ""
+	oldRelSlash := filepath.ToSlash(oldRelName)
+	if idx := strings.LastIndex(oldRelSlash, "/"); idx != -1 {
+		folder = oldRelSlash[:idx]
 	}
 
 	newName = strings.TrimSpace(newName)
@@ -589,19 +690,25 @@ func (s *Service) RenameEpub(id string, newName string) (EpubFile, error) {
 	if !strings.HasSuffix(strings.ToLower(newName), ".epub") {
 		newName += ".epub"
 	}
-	newName = sanitizeFileName(newName)
-	if !strings.HasSuffix(strings.ToLower(newName), ".epub") {
-		newName += ".epub"
-	}
-	if newName == ".epub" {
+	cleanBase := sanitizeFileName(strings.TrimSuffix(newName, ".epub")) + ".epub"
+	if cleanBase == ".epub" {
 		return EpubFile{}, errors.New("invalid EPUB name")
 	}
 
-	oldPath := filepath.Join(editDir, oldName)
-	newPath := filepath.Join(editDir, newName)
-	newID := toID(newName)
+	var newRelName string
+	var newPath string
+	if folder != "" {
+		newRelName = filepath.ToSlash(filepath.Join(folder, cleanBase))
+		newPath = filepath.Join(editDir, folder, cleanBase)
+	} else {
+		newRelName = cleanBase
+		newPath = filepath.Join(editDir, cleanBase)
+	}
 
-	if oldName != newName {
+	oldPath := filepath.Join(editDir, oldRelName)
+	newID := toID(newRelName)
+
+	if oldRelName != newRelName {
 		if !strings.EqualFold(oldPath, newPath) {
 			if _, err := os.Stat(newPath); err == nil {
 				return EpubFile{}, errors.New("target EPUB already exists")
@@ -679,10 +786,249 @@ func (s *Service) RenameEpub(id string, newName string) (EpubFile, error) {
 	}
 
 	return EpubFile{
-		ID:   newID,
-		Name: newName,
-		Size: info.Size(),
+		ID:     newID,
+		Name:   cleanBase,
+		Path:   newRelName,
+		Folder: folder,
+		Size:   info.Size(),
 	}, nil
+}
+
+func (s *Service) MoveEpub(id string, targetFolder string) (EpubFile, error) {
+	lock := s.getBookLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	oldRelName, err := fromID(id)
+	if err != nil {
+		return EpubFile{}, err
+	}
+
+	oldPath := filepath.Join(editDir, oldRelName)
+	fileName := filepath.Base(oldRelName)
+
+	targetFolder = sanitizeFolderName(targetFolder)
+
+	var targetDir string
+	var newRelName string
+	var cleanFolder string
+	if targetFolder != "" {
+		rel, dir, err := findOrCreateFolder(editDir, targetFolder)
+		if err != nil {
+			return EpubFile{}, err
+		}
+		cleanFolder = rel
+		targetDir = dir
+		newRelName = filepath.ToSlash(filepath.Join(cleanFolder, fileName))
+	} else {
+		targetDir = editDir
+		newRelName = fileName
+		cleanFolder = ""
+	}
+
+	newPath := filepath.Join(targetDir, fileName)
+	newID := toID(newRelName)
+
+	if oldPath != newPath {
+		if !strings.EqualFold(oldPath, newPath) {
+			if _, err := os.Stat(newPath); err == nil {
+				return EpubFile{}, errors.New("tệp sách đã tồn tại trong thư mục đích")
+			} else if !os.IsNotExist(err) {
+				return EpubFile{}, err
+			}
+		}
+
+		pendingJobsMu.Lock()
+		isPending := pendingJobs[id]
+		pendingJobsMu.Unlock()
+		if isPending {
+			_ = s.consolidateZIP(id, oldPath)
+		}
+
+		zipReaderCacheMu.Lock()
+		if cVal, ok := zipReaderCache[id]; ok {
+			_ = cVal.reader.Close()
+			delete(zipReaderCache, id)
+		}
+		zipReaderCacheMu.Unlock()
+
+		bookCacheMu.Lock()
+		for k := range bookCache {
+			if k.path == oldPath {
+				delete(bookCache, k)
+			}
+		}
+		bookCacheMu.Unlock()
+
+		oldOverlay := filepath.Join(editDir, ".overlay", id)
+		newOverlay := filepath.Join(editDir, ".overlay", newID)
+		if _, err := os.Stat(oldOverlay); err == nil {
+			_ = renameFileWithRetry(oldOverlay, newOverlay)
+		}
+
+		overlayVersionsMu.Lock()
+		if v, ok := overlayVersions[id]; ok {
+			overlayVersions[newID] = v
+			delete(overlayVersions, id)
+		}
+		if sv, ok := overlayStructureVersions[id]; ok {
+			overlayStructureVersions[newID] = sv
+			delete(overlayStructureVersions, id)
+		}
+		overlayVersionsMu.Unlock()
+
+		lastZippedMu.Lock()
+		if lz, ok := lastZipped[id]; ok {
+			lastZipped[newID] = lz
+			delete(lastZipped, id)
+		}
+		lastZippedMu.Unlock()
+
+		if err := renameFileWithRetry(oldPath, newPath); err != nil {
+			return EpubFile{}, err
+		}
+		_ = removeFileWithRetry(oldPath + ".tmp")
+		_ = renameFileWithRetry(oldPath+".bak", newPath+".bak")
+	}
+
+	info, err := os.Stat(newPath)
+	if err != nil {
+		return EpubFile{}, err
+	}
+
+	s.bookMu.Lock()
+	if s.locks != nil {
+		delete(s.locks, id)
+	}
+	s.bookMu.Unlock()
+
+	if id != newID {
+		s.moveUndoStack(id, newID)
+	}
+
+	return EpubFile{
+		ID:     newID,
+		Name:   fileName,
+		Path:   newRelName,
+		Folder: cleanFolder,
+		Size:   info.Size(),
+	}, nil
+}
+
+func (s *Service) CreateFolder(name string) (string, error) {
+	cleanName := sanitizeFolderName(name)
+	if cleanName == "" {
+		return "", errors.New("tên thư mục không hợp lệ")
+	}
+	folderRel, _, err := findOrCreateFolder(editDir, cleanName)
+	if err != nil {
+		return "", err
+	}
+	return folderRel, nil
+}
+
+func (s *Service) RenameFolder(oldName, newName string) error {
+	cleanOld := sanitizeFolderName(oldName)
+	cleanNew := sanitizeFolderName(newName)
+	if cleanOld == "" || cleanNew == "" {
+		return errors.New("tên thư mục không hợp lệ")
+	}
+	oldPath := filepath.Join(editDir, cleanOld)
+	newPath := filepath.Join(editDir, cleanNew)
+
+	if _, err := os.Stat(oldPath); os.IsNotExist(err) {
+		return errors.New("thư mục nguồn không tồn tại")
+	}
+	if !strings.EqualFold(oldPath, newPath) {
+		if _, err := os.Stat(newPath); err == nil {
+			return errors.New("thư mục đích đã tồn tại")
+		}
+	}
+
+	s.FlushAllZipWrites()
+
+	zipReaderCacheMu.Lock()
+	for k, v := range zipReaderCache {
+		if decoded, err := fromID(k); err == nil {
+			slashDecoded := filepath.ToSlash(decoded)
+			if strings.HasPrefix(slashDecoded, cleanOld+"/") {
+				_ = v.reader.Close()
+				delete(zipReaderCache, k)
+			}
+		}
+	}
+	zipReaderCacheMu.Unlock()
+
+	bookCacheMu.Lock()
+	for k := range bookCache {
+		if strings.HasPrefix(k.path, oldPath+string(filepath.Separator)) {
+			delete(bookCache, k)
+		}
+	}
+	bookCacheMu.Unlock()
+
+	return renameFileWithRetry(oldPath, newPath)
+}
+
+func (s *Service) DeleteFolder(name string) error {
+	cleanName := sanitizeFolderName(name)
+	if cleanName == "" {
+		return errors.New("tên thư mục không hợp lệ")
+	}
+	folderPath := filepath.Join(editDir, cleanName)
+	if _, err := os.Stat(folderPath); os.IsNotExist(err) {
+		return errors.New("thư mục không tồn tại")
+	}
+
+	s.FlushAllZipWrites()
+
+	zipReaderCacheMu.Lock()
+	for k, v := range zipReaderCache {
+		if decoded, err := fromID(k); err == nil {
+			slashDecoded := filepath.ToSlash(decoded)
+			if strings.HasPrefix(slashDecoded, cleanName+"/") {
+				_ = v.reader.Close()
+				delete(zipReaderCache, k)
+			}
+		}
+	}
+	zipReaderCacheMu.Unlock()
+
+	bookCacheMu.Lock()
+	for k := range bookCache {
+		if strings.HasPrefix(k.path, folderPath+string(filepath.Separator)) {
+			delete(bookCache, k)
+		}
+	}
+	bookCacheMu.Unlock()
+
+	return os.RemoveAll(folderPath)
+}
+
+func findOrCreateFolder(baseDir, name string) (string, string, error) {
+	cleanName := sanitizeFolderName(name)
+	if cleanName == "" {
+		return "", baseDir, nil
+	}
+
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		return "", "", err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+			if strings.EqualFold(entry.Name(), cleanName) || strings.EqualFold(entry.Name(), strings.TrimSpace(name)) {
+				return entry.Name(), filepath.Join(baseDir, entry.Name()), nil
+			}
+		}
+	}
+
+	dirPath := filepath.Join(baseDir, cleanName)
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return "", "", err
+	}
+	return cleanName, dirPath, nil
 }
 
 func removeFileWithRetry(path string) error {

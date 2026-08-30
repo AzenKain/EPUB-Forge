@@ -22,6 +22,7 @@ function resolveValue<T>(value: T | ((current: T) => T), current: T): T {
 
 type AppStore = {
   books: EpubFile[];
+  folders: string[];
   selectedId: string;
   analysis: BookAnalysis | null;
   mergeOpen: boolean;
@@ -42,6 +43,7 @@ type AppStore = {
   exportProgress: ExportProgress | null;
   previewRevision: number;
   setBooks: Setter<EpubFile[]>;
+  setFolders: Setter<string[]>;
   setSelectedId: Setter<string>;
   setAnalysis: Setter<BookAnalysis | null>;
   setMergeOpen: Setter<boolean>;
@@ -66,6 +68,7 @@ type AppStore = {
 
 export const useAppStore = create<AppStore>((set) => ({
   books: [],
+  folders: [],
   selectedId: "",
   analysis: null,
   mergeOpen: false,
@@ -86,6 +89,7 @@ export const useAppStore = create<AppStore>((set) => ({
   exportProgress: null,
   previewRevision: 0,
   setBooks: (value) => set((state) => ({ books: resolveValue(value, state.books) })),
+  setFolders: (value) => set((state) => ({ folders: resolveValue(value, state.folders) })),
   setSelectedId: (value) => set((state) => ({ selectedId: resolveValue(value, state.selectedId) })),
   setAnalysis: (value) => set((state) => ({ analysis: resolveValue(value, state.analysis) })),
   setMergeOpen: (value) => set((state) => ({ mergeOpen: resolveValue(value, state.mergeOpen) })),

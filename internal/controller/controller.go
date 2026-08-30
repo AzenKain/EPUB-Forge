@@ -65,6 +65,18 @@ func (c *Controller) Epub(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 2 && parts[1] == "analyze":
 		analysis, err := c.service.Analyze(id)
 		utils.WriteJSON(w, analysis, err)
+	case len(parts) == 2 && parts[1] == "move":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req models.MoveEpubRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			utils.WriteError(w, err)
+			return
+		}
+		file, err := c.service.MoveEpub(id, req.Folder)
+		utils.WriteJSON(w, file, err)
 	case len(parts) == 2 && parts[1] == "undo":
 		if r.Method == http.MethodGet {
 			status, err := c.service.UndoStatus(id)
@@ -499,6 +511,11 @@ func (c *Controller) UploadEpub(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	folder := strings.TrimSpace(r.FormValue("folder"))
+	if folder == "" {
+		folder = strings.TrimSpace(r.URL.Query().Get("folder"))
+	}
+
 	var buf bytes.Buffer
 	_, err = io.Copy(&buf, file)
 	if err != nil {
@@ -506,8 +523,51 @@ func (c *Controller) UploadEpub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fileName, err := c.service.UploadEpub(header.Filename, buf.Bytes())
+	fileName, err := c.service.UploadEpub(header.Filename, buf.Bytes(), folder)
 	utils.WriteJSON(w, map[string]any{"success": true, "fileName": fileName}, err)
+}
+
+func (c *Controller) Folders(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		folders, err := c.service.ListFolders()
+		utils.WriteJSON(w, folders, err)
+	case http.MethodPost:
+		var req models.CreateFolderRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			utils.WriteError(w, err)
+			return
+		}
+		folder, err := c.service.CreateFolder(req.Name)
+		utils.WriteJSON(w, map[string]any{"success": true, "name": folder}, err)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (c *Controller) Folder(w http.ResponseWriter, r *http.Request) {
+	folderName := strings.TrimPrefix(r.URL.Path, "/api/folders/")
+	folderName, _ = url.PathUnescape(folderName)
+	if folderName == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPatch:
+		var req models.RenameFolderRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			utils.WriteError(w, err)
+			return
+		}
+		err := c.service.RenameFolder(folderName, req.Name)
+		utils.WriteJSON(w, map[string]any{"success": true}, err)
+	case http.MethodDelete:
+		err := c.service.DeleteFolder(folderName)
+		utils.WriteJSON(w, map[string]any{"success": true}, err)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func (c *Controller) SearchMetadata(w http.ResponseWriter, r *http.Request) {

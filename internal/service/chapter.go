@@ -1074,7 +1074,7 @@ func (ctx *BookContext) writeEditedEPUB(editedFiles map[string][]byte) (string, 
 		}()
 	}
 
-	return filepath.Base(ctx.FilePath), nil
+	return filepath.ToSlash(ctx.FileName), nil
 }
 
 func replaceNCXTitle(ncxXML, src, newTitle string) string {

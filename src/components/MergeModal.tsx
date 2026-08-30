@@ -129,8 +129,8 @@ export function MergeModal({
                 return (
                   <div key={id} className="mergeOrderItem">
                     <span className="mergeOrderSeq">{seq + 1}</span>
-                    <span className="mergeOrderTitle" title={book?.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                      {book?.name || `Sách ${id}`}
+                    <span className="mergeOrderTitle" title={book?.folder ? `${book.folder} / ${book.name}` : book?.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                      {book ? (book.folder ? `📁 ${book.folder} / ${book.name}` : book.name) : `Sách ${id}`}
                     </span>
                     {seq === 0 && (
                       <span className="mainChapterLabel" style={{ marginRight: "8px" }}>
@@ -216,7 +216,7 @@ export function MergeModal({
                 <option value="" disabled>-- Chọn tệp EPUB để thêm --</option>
                 {availableBooks.map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.name}
+                    {b.folder ? `📁 ${b.folder} / ${b.name}` : b.name}
                   </option>
                 ))}
               </select>

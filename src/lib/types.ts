@@ -1,6 +1,8 @@
 export type EpubFile = {
   id: string;
   name: string;
+  path?: string;
+  folder?: string;
   size: number;
 };
 

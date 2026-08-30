@@ -19,7 +19,7 @@ import (
 //go:embed all:dist
 var embeddedDist embed.FS
 
-var Version = "2.4.6"
+var Version = "2.5.0"
 
 func main() {
 	workspace, err := os.Getwd()

@@ -165,14 +165,58 @@ button {
 }
 
 .bookItem {
-  display: grid;
-  grid-template-columns: 18px 1fr;
-  gap: 8px;
+  display: flex;
   align-items: center;
+  gap: 7px;
   border-radius: 7px;
-  padding: 10px;
+  padding: 8px 10px;
   text-align: left;
   position: relative;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  background: #fffdf8;
+  border: 1px solid #d8d5cc;
+  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.15s ease;
+}
+
+.bookItem:hover {
+  background: #f7f5ee;
+  border-color: #cac6bb;
+}
+
+.bookItem.active {
+  border-color: #2f7d69;
+  background: #e9f6f0;
+}
+
+.bookItemInfo {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  margin-right: 56px;
+}
+
+.bookItem.inBulkMode .bookItemInfo {
+  margin-right: 18px;
+}
+
+.bookItemTitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: #17201c;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.35;
+}
+
+.bookItemSize {
+  font-size: 11px;
+  color: #687168;
+  line-height: 1.2;
 }
 
 .bookDeleteBtn {
@@ -272,20 +316,332 @@ button {
   flex-shrink: 0;
 }
 
-.bookItem span {
+.sidebarCollapsed .bookItemInfo {
+  display: none !important;
+}
+
+.sidebarCollapsed .dragGrip {
+  display: none !important;
+}
+
+/* Folder Group and Tree Styles */
+.folderSection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.folderHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f4f2ec;
+  border: 1px solid #dfdcd3;
+  color: #17201c;
+  cursor: pointer;
+  position: relative;
+  user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.folderHeader:hover {
+  background: #eae7de;
+  border-color: #cac6bb;
+}
+
+.folderHeader.active {
+  border-color: #2f7d69;
+  background: #edf7f3;
+}
+
+.folderChevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #687168;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.folderIcon {
+  color: #b3731a;
+  flex-shrink: 0;
+}
+
+.folderTitle {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 13px;
+  color: #2c3631;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.bookItem small {
-  grid-column: 2;
-  color: #687168;
+.folderBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 10px;
+  background: #e0dcd3;
+  color: #555e56;
+  flex-shrink: 0;
 }
 
-.bookItem.active {
-  border-color: #2f7d69;
+.folderActions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.folderHeader:hover .folderActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.folderChildren {
+  margin-left: 14px;
+  padding-left: 6px;
+  border-left: 2px solid #d8d5cc;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+.folderEmpty {
+  font-size: 12px;
+  font-style: italic;
+  color: #8c968e;
+  padding: 6px 8px;
+}
+
+.bookItem.inFolder {
+  padding: 6px 8px;
+  background: #fffdfa;
+}
+
+.bookItem.inFolder:hover {
+  background: #fbf9f4;
+}
+
+.bookItem.inFolder.active {
   background: #e9f6f0;
+}
+
+/* Drag and Drop Styles & Tactile Animations */
+.sidebarIsDragging .folderHeader > *:not(input),
+.sidebarIsDragging .folderEmpty,
+.sidebarIsDragging .bookItem > *:not(input),
+.sidebarIsDragging .dragGrip {
+  pointer-events: none;
+}
+
+.folderHeader {
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+}
+
+.folderHeader.dragOver {
+  background: #cbf3e3 !important;
+  border: 2px dashed #2f7d69 !important;
+  transform: scale(1.02) translateX(3px);
+  box-shadow: 0 4px 14px rgba(47, 125, 105, 0.25);
+}
+
+.folderHeader.justReceived {
+  animation: folderReceiveBounce 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes folderReceiveBounce {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.04); background: #c2eedc; border-color: #2f7d69; }
+  70% { transform: scale(0.99); }
+  100% { transform: scale(1); }
+}
+
+.folderChildren {
+  animation: folderExpand 0.22s ease-out;
+}
+
+@keyframes folderExpand {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.folderChildren.dragOver {
+  background: rgba(47, 125, 105, 0.08);
+  border-radius: 6px;
+  padding: 4px;
+}
+
+.dropPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 7px;
+  border: 2px dashed #2f7d69;
+  background: rgba(47, 125, 105, 0.1);
+  color: #1a5f49;
+  font-size: 12px;
+  font-weight: 600;
+  animation: placeholderPulse 1s infinite alternate ease-in-out;
+}
+
+@keyframes placeholderPulse {
+  0% { background: rgba(47, 125, 105, 0.06); border-color: #2f7d69; }
+  100% { background: rgba(47, 125, 105, 0.18); border-color: #1a5f49; }
+}
+
+.bookItem[draggable="true"] {
+  cursor: grab;
+}
+
+.bookItem[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.bookItem.isDragging {
+  opacity: 0.35;
+  transform: scale(0.97);
+  border: 1px dashed #2f7d69 !important;
+  background: #e2f4ed !important;
+}
+
+.bookItem.justDropped {
+  animation: bookDropLanding 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  box-shadow: 0 0 0 3px rgba(47, 125, 105, 0.35), 0 4px 14px rgba(47, 125, 105, 0.2);
+}
+
+@keyframes bookDropLanding {
+  0% {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.94);
+    background: #b6eed8;
+    border-color: #2f7d69;
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(3px) scale(1.02);
+    background: #d8f6ea;
+    border-color: #2f7d69;
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.bookItem.isMoving {
+  opacity: 0.8;
+  border: 1px dashed #2f7d69 !important;
+  background: #e6f6ef !important;
+  animation: movingPulse 1.2s infinite ease-in-out;
+}
+
+@keyframes movingPulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 0.95; }
+  100% { opacity: 0.6; }
+}
+
+@keyframes spinLoader {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spinIcon {
+  animation: spinLoader 1s linear infinite;
+}
+
+.rootDropZone {
+  border: 2px dashed #2f7d69;
+  border-radius: 7px;
+  padding: 10px;
+  margin: 6px 0;
+  background: rgba(47, 125, 105, 0.06);
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a5f49;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+  user-select: none;
+  animation: placeholderPulse 1s infinite alternate ease-in-out;
+}
+
+.rootDropZone.dragOver {
+  background: #cbf3e3 !important;
+  border: 2px dashed #1a5f49 !important;
+  color: #134e3f;
+  transform: scale(1.02);
+  box-shadow: 0 4px 14px rgba(47, 125, 105, 0.25);
+}
+
+.dragGrip {
+  opacity: 0.35;
+  color: #8c968e;
+  flex-shrink: 0;
+  cursor: grab;
+  transition: opacity 0.15s ease;
+}
+
+.bookItem:hover .dragGrip {
+  opacity: 0.85;
+}
+
+.sidebarSectionLabel {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #7b857d;
+  margin: 8px 0 4px 4px;
+}
+
+.sidebarSearchBox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #fffdf8;
+  border: 1px solid #c9c6bd;
+  border-radius: 6px;
+  padding: 4px 8px;
+  width: 100%;
+}
+
+.sidebarSearchBox input {
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 12px;
+  width: 100%;
+  color: #17201c;
+}
+
+.sidebarSearchBox input::placeholder {
+  color: #8c968e;
 }
 
 .workspace {

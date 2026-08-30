@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -310,7 +311,7 @@ func (ctx *BookContext) parse() error {
 	ctx.Title = ctx.Metadata.Title
 	ctx.Creator = ctx.Metadata.Creator
 	if ctx.Title == "" {
-		ctx.Title = strings.TrimSuffix(ctx.FileName, filepath.Ext(ctx.FileName))
+		ctx.Title = strings.TrimSuffix(filepath.Base(ctx.FileName), filepath.Ext(ctx.FileName))
 	}
 	ctx.Manifest = parseManifest(ctx.OPFXML, ctx.OPFDir)
 	for _, item := range ctx.Manifest {
@@ -999,6 +1000,7 @@ func (ctx *BookContext) SaveOriginalMetadata(metadata BookMetadata) error {
 }
 
 func toID(name string) string {
+	name = filepath.ToSlash(name)
 	return base64.RawURLEncoding.EncodeToString([]byte(name))
 }
 
@@ -1007,11 +1009,24 @@ func fromID(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := string(data)
-	if strings.ContainsAny(name, `/\`) || filepath.Base(name) != name || !strings.HasSuffix(strings.ToLower(name), ".epub") {
-		return "", errors.New("invalid EPUB id")
+	raw := strings.ReplaceAll(string(data), "\\", "/")
+	cleaned := path.Clean(raw)
+	if cleaned == "." || cleaned == "/" || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") || strings.Contains(cleaned, "/../") {
+		return "", errors.New("invalid EPUB id: path traversal detected")
 	}
-	return name, nil
+	if !strings.HasSuffix(strings.ToLower(cleaned), ".epub") {
+		return "", errors.New("invalid EPUB id: must have .epub extension")
+	}
+	parts := strings.Split(cleaned, "/")
+	if len(parts) > 2 {
+		return "", errors.New("invalid EPUB id: path depth exceeded")
+	}
+	for _, part := range parts {
+		if strings.HasPrefix(part, ".") || part == "" {
+			return "", errors.New("invalid EPUB id: invalid segment")
+		}
+	}
+	return filepath.FromSlash(cleaned), nil
 }
 
 func parseNCX(ncx, opfDir string) []TocPoint {

@@ -16,7 +16,7 @@ import { RepairModal } from "./components/RepairModal";
 import { GalleryModal } from "./components/GalleryModal";
 import { api, normalizeAnalysis, readError } from "./lib/api";
 import { useAppStore } from "./lib/appStore";
-import { formatBytes } from "./lib/format";
+import { formatBytes, toID } from "./lib/format";
 import {
   emptyMetadata,
   type BookAnalysis,
@@ -38,6 +38,7 @@ function isEditableShortcutTarget(target: EventTarget | null) {
 function App() {
   const {
     books,
+    folders,
     selectedId,
     analysis,
     mergeOpen,
@@ -58,6 +59,7 @@ function App() {
     exportProgress,
     previewRevision,
     setBooks,
+    setFolders,
     setSelectedId,
     setAnalysis,
     setMergeOpen,
@@ -88,6 +90,7 @@ function App() {
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResponse | null>(null);
   const [undoStatus, setUndoStatus] = useState<UndoStatus>({ canUndo: false, count: 0 });
+  const [movingBookIds, setMovingBookIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     refreshBooks();
@@ -142,9 +145,13 @@ function App() {
     setError("");
     setNotice("");
     try {
-      const data = await api<EpubFile[]>("/api/epubs");
+      const [data, foldersData] = await Promise.all([
+        api<EpubFile[]>("/api/epubs"),
+        api<string[]>("/api/folders").catch(() => [])
+      ]);
       const nextBooks = Array.isArray(data) ? data : [];
       setBooks(nextBooks);
+      setFolders(Array.isArray(foldersData) ? foldersData : []);
       setSelectedId((current) => current || nextBooks[0]?.id || "");
     } catch (err) {
       setError(readError(err));
@@ -358,36 +365,12 @@ function App() {
   async function handleMergeSuccess(newFileName: string) {
     await refreshBooks();
     setNotice(`Đã gộp thành công các tệp EPUB thành "${newFileName}".`);
-    
-    const toID = (name: string) => {
-      const utf8Bytes = new TextEncoder().encode(name);
-      let binary = "";
-      for (let i = 0; i < utf8Bytes.length; i++) {
-        binary += String.fromCharCode(utf8Bytes[i]);
-      }
-      return btoa(binary)
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
-    };
     setSelectedId(toID(newFileName));
   }
 
   async function handleImportSuccess(newFileName: string) {
     await refreshBooks();
     setNotice(`Đã tạo và nhập thành công truyện thành tệp EPUB "${newFileName}".`);
-    
-    const toID = (name: string) => {
-      const utf8Bytes = new TextEncoder().encode(name);
-      let binary = "";
-      for (let i = 0; i < utf8Bytes.length; i++) {
-        binary += String.fromCharCode(utf8Bytes[i]);
-      }
-      return btoa(binary)
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
-    };
     setSelectedId(toID(newFileName));
   }
 
@@ -400,22 +383,11 @@ function App() {
     }
     
     if (fileNames.length > 0) {
-      const toID = (name: string) => {
-        const utf8Bytes = new TextEncoder().encode(name);
-        let binary = "";
-        for (let i = 0; i < utf8Bytes.length; i++) {
-          binary += String.fromCharCode(utf8Bytes[i]);
-        }
-        return btoa(binary)
-          .replace(/\+/g, "-")
-          .replace(/\//g, "_")
-          .replace(/=+$/, "");
-      };
       setSelectedId(toID(fileNames[0]));
     }
   }
 
-  async function handleUploadBooks(files: File[]) {
+  async function handleUploadBooks(files: File[], folder: string = "") {
     setBusy(`Đang tải lên ${files.length} sách...`);
     setError("");
     setNotice("");
@@ -424,6 +396,9 @@ function App() {
         files.map(async (file) => {
           const formData = new FormData();
           formData.append("file", file);
+          if (folder) {
+            formData.append("folder", folder);
+          }
 
           const response = await fetch("/api/epubs/upload", {
             method: "POST",
@@ -445,17 +420,6 @@ function App() {
 
       const lastUploadedName = results[results.length - 1];
       if (lastUploadedName) {
-        const toID = (name: string) => {
-          const utf8Bytes = new TextEncoder().encode(name);
-          let binary = "";
-          for (let i = 0; i < utf8Bytes.length; i++) {
-            binary += String.fromCharCode(utf8Bytes[i]);
-          }
-          return btoa(binary)
-            .replace(/\+/g, "-")
-            .replace(/\//g, "_")
-            .replace(/=+$/, "");
-        };
         setSelectedId(toID(lastUploadedName));
       }
     } catch (err) {
@@ -489,6 +453,148 @@ function App() {
       setSelectedId(renamed.id);
       void refreshUndoStatus(renamed.id);
       setNotice(`\u0110\u00e3 \u0111\u1ed5i t\u00ean "${name}" th\u00e0nh "${renamed.name}".`);
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleMoveBook(id: string, targetFolder: string) {
+    const prevBooks = books;
+    const targetName = targetFolder ? `thư mục "${targetFolder}"` : "thư mục gốc";
+
+    // 1. Instant optimistic update for 0ms delay
+    setMovingBookIds((prev) => new Set(prev).add(id));
+    setBooks((current) =>
+      current.map((b) => {
+        if (b.id === id) {
+          const newRel = targetFolder ? `${targetFolder}/${b.name}` : b.name;
+          return { ...b, folder: targetFolder || undefined, path: newRel };
+        }
+        return b;
+      })
+    );
+
+    try {
+      const moved = await api<EpubFile>(`/api/epubs/${encodeURIComponent(id)}/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder: targetFolder })
+      });
+      setBooks((current) =>
+        current.map((b) => (b.id === id || b.id === moved.id ? moved : b))
+      );
+      if (selectedId === id) {
+        setSelectedId(moved.id);
+        void refreshUndoStatus(moved.id);
+      }
+    } catch (err) {
+      setBooks(prevBooks);
+      setError(readError(err));
+    } finally {
+      setMovingBookIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  async function handleMoveBooks(ids: string[], targetFolder: string) {
+    if (ids.length === 0) return;
+    const prevBooks = books;
+
+    // 1. Instant optimistic update for 0ms delay
+    setMovingBookIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+    setBooks((current) =>
+      current.map((b) => {
+        if (ids.includes(b.id)) {
+          const newRel = targetFolder ? `${targetFolder}/${b.name}` : b.name;
+          return { ...b, folder: targetFolder || undefined, path: newRel };
+        }
+        return b;
+      })
+    );
+
+    try {
+      const results = await Promise.all(
+        ids.map((id) =>
+          api<EpubFile>(`/api/epubs/${encodeURIComponent(id)}/move`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ folder: targetFolder })
+          })
+        )
+      );
+      setBooks((current) => {
+        const resultMap = new Map(results.map((r) => [r.name, r]));
+        return current.map((b) => resultMap.get(b.name) || b);
+      });
+    } catch (err) {
+      setBooks(prevBooks);
+      setError(readError(err));
+    } finally {
+      setMovingBookIds((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
+  }
+
+  async function handleCreateFolder(name: string) {
+    setBusy("Đang tạo thư mục...");
+    setError("");
+    setNotice("");
+    try {
+      await api<{ success: boolean; name: string }>("/api/folders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name })
+      });
+      await refreshBooks();
+      setNotice(`Đã tạo thư mục "${name}" thành công.`);
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleRenameFolder(oldName: string, newName: string) {
+    setBusy("Đang đổi tên thư mục...");
+    setError("");
+    setNotice("");
+    try {
+      await api<{ success: boolean }>(`/api/folders/${encodeURIComponent(oldName)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName })
+      });
+      await refreshBooks();
+      setNotice(`Đã đổi tên thư mục thành "${newName}".`);
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleDeleteFolder(name: string) {
+    setBusy("Đang xoá thư mục...");
+    setError("");
+    setNotice("");
+    try {
+      await api<{ success: boolean }>(`/api/folders/${encodeURIComponent(name)}`, {
+        method: "DELETE"
+      });
+      await refreshBooks();
+      setNotice(`Đã xoá thư mục "${name}" thành công.`);
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -570,8 +676,10 @@ function App() {
     <main className={sidebarCollapsed ? "shell sidebarCollapsed" : "shell"}>
       <BookSidebar
         books={books}
+        folders={folders}
         selectedId={selectedId}
         busy={Boolean(busy)}
+        movingBookIds={movingBookIds}
         collapsed={sidebarCollapsed}
         onRefresh={refreshBooks}
         onSelect={setSelectedId}
@@ -583,6 +691,11 @@ function App() {
         onDeleteBook={handleDeleteBook}
         onDeleteBooks={handleDeleteBooks}
         onRenameBook={handleRenameBook}
+        onMoveBook={handleMoveBook}
+        onMoveBooks={handleMoveBooks}
+        onCreateFolder={handleCreateFolder}
+        onRenameFolder={handleRenameFolder}
+        onDeleteFolder={handleDeleteFolder}
       />
 
       <section className="workspace">

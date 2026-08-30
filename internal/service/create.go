@@ -63,7 +63,23 @@ func (s *Service) CreateEpub(req models.CreateEpubRequest, mangaImages map[strin
 		direction = "ltr"
 	}
 
-	outputName, outputPath := uniqueCreateOutputPath(title)
+	var relFolder string
+	targetDir := editDir
+
+	folderTarget := strings.TrimSpace(req.Folder)
+	if folderTarget == "" && strings.TrimSpace(req.Metadata.Series) != "" {
+		folderTarget = strings.TrimSpace(req.Metadata.Series)
+	}
+
+	if folderTarget != "" {
+		rel, dir, err := findOrCreateFolder(editDir, folderTarget)
+		if err == nil {
+			relFolder = rel
+			targetDir = dir
+		}
+	}
+
+	outputName, outputPath := uniqueCreateOutputPathInDir(targetDir, relFolder, title)
 	out, err := os.Create(outputPath)
 	if err != nil {
 		return "", fmt.Errorf("không thể tạo file EPUB mới: %w", err)
@@ -327,20 +343,30 @@ func (s *Service) repairCreatedEpub(outputName string) error {
 }
 
 func uniqueCreateOutputPath(title string) (string, string) {
+	return uniqueCreateOutputPathInDir(editDir, "", title)
+}
+
+func uniqueCreateOutputPathInDir(targetDir, relFolder, title string) (string, string) {
 	cleanTitle := sanitizeFileName(title)
 	if cleanTitle == "" {
 		cleanTitle = "epub"
 	}
 
-	outputName := cleanTitle + ".epub"
-	outputPath := filepath.Join(editDir, outputName)
+	fileName := cleanTitle + ".epub"
+	outputPath := filepath.Join(targetDir, fileName)
 	counter := 1
 	for {
 		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-			return outputName, outputPath
+			var rel string
+			if relFolder != "" {
+				rel = filepath.ToSlash(filepath.Join(relFolder, fileName))
+			} else {
+				rel = fileName
+			}
+			return rel, outputPath
 		}
-		outputName = fmt.Sprintf("%s (%d).epub", cleanTitle, counter)
-		outputPath = filepath.Join(editDir, outputName)
+		fileName = fmt.Sprintf("%s (%d).epub", cleanTitle, counter)
+		outputPath = filepath.Join(targetDir, fileName)
 		counter++
 	}
 }

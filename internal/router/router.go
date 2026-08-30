@@ -18,6 +18,8 @@ func New(svc *service.Service, frontend fs.FS) *http.ServeMux {
 	mux.HandleFunc("/api/metadata/search", ctrl.SearchMetadata)
 	mux.HandleFunc("/api/epubs/upload", ctrl.UploadEpub)
 	mux.HandleFunc("/api/epubs/create-manga", ctrl.CreateManga)
+	mux.HandleFunc("/api/folders", ctrl.Folders)
+	mux.HandleFunc("/api/folders/", ctrl.Folder)
 	mux.HandleFunc("/api/extensions", ctrl.ListExtensions)
 	mux.HandleFunc("/api/extensions/upload", ctrl.UploadExtension)
 	mux.HandleFunc("/api/extensions/delete", ctrl.DeleteExtension)

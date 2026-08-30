@@ -1,12 +1,26 @@
 package models
 
 type EpubFile struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Size int64  `json:"size"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Folder string `json:"folder,omitempty"`
+	Size   int64  `json:"size"`
 }
 
 type RenameEpubRequest struct {
+	Name string `json:"name"`
+}
+
+type MoveEpubRequest struct {
+	Folder string `json:"folder"`
+}
+
+type CreateFolderRequest struct {
+	Name string `json:"name"`
+}
+
+type RenameFolderRequest struct {
 	Name string `json:"name"`
 }
 
@@ -118,6 +132,7 @@ type ImportTxtRequest struct {
 type CreateEpubRequest struct {
 	Title     string              `json:"title"`
 	Author    string              `json:"author"`
+	Folder    string              `json:"folder,omitempty"`
 	Metadata  BookMetadata        `json:"metadata"`
 	Direction string              `json:"direction"`
 	Chapters  []CreateEpubChapter `json:"chapters"`
